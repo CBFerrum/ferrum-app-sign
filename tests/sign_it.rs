@@ -105,7 +105,7 @@ fn contract_pdf(label: &str) -> Vec<u8> {
 /// A drawn signature: a transparent canvas with a dark stroke, as a PNG data URL.
 fn drawn(w: u32, h: u32) -> String {
     let mut data = vec![0u8; (w * h * 4) as usize];
-    for (i, p) in data.chunks_exact_mut(4).enumerate() {
+    for (i, p) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = (i as u32 % w, i as u32 / w);
         if y.abs_diff(h / 2 + (x % 20) / 4) <= 1 && x > 4 && x < w - 4 {
             p.copy_from_slice(&[17, 17, 17, 255]);
