@@ -1,0 +1,51 @@
+[package]
+name = "ferrum-app-sign"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Electronic signatures: send PDFs for signing in order, place fields, sign by secure link, sealed PDFs with an audit trail and certificate"
+repository = "https://github.com/CBFerrum/ferrum-app-sign"
+build = "build.rs"
+
+[dependencies]
+ferrum-kernel = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
+ferrum-meta = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
+ferrum-domain = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
+ferrum-calc = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = { version = "1.43", features = ["serde-with-str", "maths"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "chrono", "rust_decimal", "json", "migrate", "macros"] }
+tracing = "0.1"
+uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
+# PDF parsing, stamping and the certificate page (no optional features: no rayon, no clock).
+lopdf = { version = "0.45", default-features = false }
+# Drawn signatures arrive as PNG: decoded to raw pixels for a PDF image XObject.
+png = "0.18"
+chrono-tz = { version = "0.10", default-features = false }
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+base64 = "0.22"
+rand = "0.9"
+# PDF parsing and Argon2 run on the blocking pool.
+tokio = { version = "1.45", features = ["rt"] }
+
+[dev-dependencies]
+# Emails go through the Mail app when a workspace has it: tested with the real app.
+ferrum-app-comms = { git = "https://github.com/CBFerrum/ferrum-app-comms", branch = "main" }
+tokio = { version = "1.45", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+
+[lints.clippy]
+type_complexity = "allow"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
+large_enum_variant = "allow"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

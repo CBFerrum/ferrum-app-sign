@@ -1,0 +1,14 @@
+id: sign
+name: Sign
+version: 0.1.0
+publisher: cbferrum
+summary: "Electronic signatures: send PDFs for signing in order, place fields, sign by secure link, sealed PDFs with an audit trail and certificate"
+description: README.md
+categories: [productivity]
+license: AGPL-3.0-only
+homepage: https://github.com/CBFerrum/ferrum-app-sign
+support: https://github.com/CBFerrum/ferrum-app-sign/issues
+runtime: native
+platform: ">=0.3, <0.4"
+packages: [sign]
+uninstall: ask
