@@ -127,9 +127,14 @@ pub(crate) async fn lock_request(k: &Kernel, ctx: &Ctx, tx: &mut ferrum_kernel::
     k.get_tx(ctx, tx, "SignRequest", id, false).await
 }
 
-/// Whether the workspace has the Mail app, which delivers this app's emails.
+/// Whether the workspace has the Mail app, which delivers this app's emails when installed.
 pub(crate) fn mail(ctx: &Ctx) -> bool {
     ctx.schema.packages.iter().any(|p| p == "comms") && ctx.schema.entity("Communication").is_some()
+}
+
+/// Whether this app's emails can go out at all: through the Mail app, or the server's mailer.
+pub(crate) fn can_email(k: &ferrum_kernel::Kernel, ctx: &Ctx) -> bool {
+    mail(ctx) || k.mailer.is_some()
 }
 
 /// The physical table of a child table field.

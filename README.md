@@ -9,7 +9,7 @@ A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, 
 - Sealing: every value stamped onto the original pages and an audit certificate appended as an incremental update, so the signed document is a byte-exact, checkable prefix of the sealed file; the sealed PDF and its SHA-256 are kept, the sender is notified and every signer gets a copy by email
 - An append-only, SHA-256 hash-chained audit trail — sent, viewed, signed, declined, reminded, resent, corrected, access denied, voided, expired, completed — with salted IP hashes and user agents
 - Verify Integrity recomputes the original's, the sealed PDF's and the audit trail's hashes; a public endpoint tells anyone whether a PDF they hold is a genuine sealed document
-- Emails through the Mail app when it is installed; otherwise copyable links and in-app notifications. Automatic reminders on a cadence (each sent once), expiry, void, corrections of a signer's name or email, resending
+- Emails through the Mail app when it is installed, otherwise through the server's mailer (the signed PDF travels with the completion email when the mailer can attach files); copyable links and in-app notifications when no email can go out. Automatic reminders on a cadence (each sent once), expiry, void, corrections of a signer's name or email, resending
 - Reports: requests by status, time to complete, pending signatures by signer — each sender sees their own
 - This is an **electronic signature with an audit trail, not a PAdES digital signature**: no certificate-based cryptographic signature is embedded in the PDF; integrity rests on the SHA-256 values and the audit trail
 - `packages/sign/README.md` documents every entity, action, endpoint, setting and maintenance job

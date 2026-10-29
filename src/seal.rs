@@ -120,7 +120,7 @@ async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, sha: &str, s
         Some(&format!("\"{}\" is complete; the sealed PDF is on the request.", s(&done, "title").unwrap_or_default())),
     )
     .await?;
-    if crate::mail(sys) {
+    if crate::can_email(k, sys) {
         let out = Outbox::load(k, sys, &mut tx).await?;
         let name: String =
             sqlx::query_scalar("select file_name from file_object where tenant_id = $1 and id = $2").bind(sys.tenant).bind(file).fetch_one(&mut *tx).await?;
