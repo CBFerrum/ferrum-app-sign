@@ -1,6 +1,6 @@
-//! Getting word to people: signers' links, emails through the Mail app (a `Communication` record
-//! per message, delivered and retried by Mail) when the workspace has it, in-app notifications
-//! for users otherwise.
+//! Getting word to people: signers' links and emails — through the Mail app (a `Communication`
+//! record per message, delivered and retried by Mail) when the workspace has it, otherwise through
+//! the server's mailer — and in-app notifications for users when no email can go out.
 
 use crate::settings::{self, Settings};
 use crate::{doc_id, human, id, s, time, token};
@@ -10,7 +10,12 @@ use uuid::Uuid;
 
 /// What a delivery needs: the settings, the workspace slug for links and the signing key.
 pub struct Outbox {
+    /// Emails can go out (Mail app or server mailer).
     pub mail: bool,
+    /// They go through the Mail app.
+    via_app: bool,
+    /// The sealed PDF can travel with the completion email.
+    attach: bool,
     pub settings: Settings,
     tenant: Uuid,
     slug: String,
@@ -22,7 +27,9 @@ impl Outbox {
         let settings = settings::load(k, ctx, tx).await?;
         let key = token::signing_key(k, tx, ctx.tenant).await?;
         let slug = settings::slug(tx, ctx.tenant).await?;
-        Ok(Outbox { mail: crate::mail(ctx), settings, tenant: ctx.tenant, slug, key })
+        let via_app = crate::mail(ctx);
+        let attach = via_app || k.mailer.as_ref().is_some_and(|m| m.can_attach());
+        Ok(Outbox { mail: crate::can_email(k, ctx), via_app, attach, settings, tenant: ctx.tenant, slug, key })
     }
 
     /// The signer's link to the signing page (absolute when the public URL is known).
@@ -79,11 +86,11 @@ impl Outbox {
             strip_tags(&lead),
             s(request, "message").map(|m| format!("{m}\n\n")).unwrap_or_default()
         );
-        email(k, ctx, tx, request, signer, &subject, &html, &text, json!([])).await?;
+        email(self.via_app, k, ctx, tx, request, signer, &subject, &html, &text, json!([])).await?;
         Ok(true)
     }
 
-    /// Tells signers who had the link that the request was withdrawn (Mail only).
+    /// Tells signers who had the link that the request was withdrawn.
     pub async fn withdrawn(&self, k: &Kernel, ctx: &Ctx, tx: &mut Tx, request: &Doc, signer: &Doc) -> Result<()> {
         if !self.mail || s(signer, "email").is_none() {
             return Ok(());
@@ -98,12 +105,12 @@ impl Outbox {
             esc(&reason)
         );
         let text = format!("{} withdrew \"{title}\". It can no longer be signed.{reason}\n", strip_tags(&sender));
-        email(k, ctx, tx, request, signer, &format!("Withdrawn: \"{title}\""), &html, &text, json!([])).await
+        email(self.via_app, k, ctx, tx, request, signer, &format!("Withdrawn: \"{title}\""), &html, &text, json!([])).await
     }
 
-    /// Sends a signer the sealed PDF (Mail only).
+    /// Sends a signer the sealed PDF — only where it can travel with the email.
     pub async fn completed(&self, k: &Kernel, ctx: &Ctx, tx: &mut Tx, request: &Doc, signer: &Doc, file: &Value) -> Result<()> {
-        if !self.mail || s(signer, "email").is_none() {
+        if !self.mail || !self.attach || s(signer, "email").is_none() {
             return Ok(());
         }
         let title = s(request, "title").unwrap_or_default();
@@ -114,7 +121,7 @@ impl Outbox {
             esc(s(request, "number").unwrap_or_default())
         );
         let text = format!("Everyone has signed \"{title}\". The signed PDF with its audit certificate is attached.\nSHA-256: {sha}\n");
-        email(k, ctx, tx, request, signer, &format!("Signed: \"{title}\""), &html, &text, json!([file])).await
+        email(self.via_app, k, ctx, tx, request, signer, &format!("Signed: \"{title}\""), &html, &text, json!([file])).await
     }
 }
 
@@ -132,10 +139,26 @@ pub async fn sender_of(tx: &mut Tx, tenant: Uuid, request: &Doc) -> Result<Optio
     Ok(sqlx::query_as("select full_name, email::text from app_user where tenant_id = $1 and id = $2").bind(tenant).bind(user).fetch_optional(&mut **tx).await?)
 }
 
-/// One email through Mail, on the request's timeline.
+/// One email: through Mail, on the request's timeline, or through the server's mailer.
 #[allow(clippy::too_many_arguments)]
-async fn email(k: &Kernel, ctx: &Ctx, tx: &mut Tx, request: &Doc, to: &Doc, subject: &str, html: &str, text: &str, attachments: Value) -> Result<()> {
+async fn email(
+    via_app: bool,
+    k: &Kernel,
+    ctx: &Ctx,
+    tx: &mut Tx,
+    request: &Doc,
+    to: &Doc,
+    subject: &str,
+    html: &str,
+    text: &str,
+    attachments: Value,
+) -> Result<()> {
     let address = s(to, "email").ok_or_else(|| Error::internal("signer without email"))?;
+    if !via_app {
+        let files: Vec<Uuid> = attachments.as_array().map(|a| a.iter().filter_map(|f| f.get("id")?.as_str()?.parse().ok()).collect()).unwrap_or_default();
+        let subject: String = subject.replace(['\r', '\n'], " ").chars().take(300).collect();
+        return k.queue_mail_with(tx, ctx.tenant, address, &subject, html, &files).await;
+    }
     let name: String = s(to, "name").unwrap_or_default().chars().filter(|c| !c.is_control() && !"\"\\<>".contains(*c)).collect();
     let recipient = if name.trim().is_empty() { address.to_string() } else { format!("\"{}\" <{address}>", name.trim()) };
     let mut doc = Doc::new();
