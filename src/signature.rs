@@ -67,8 +67,13 @@ pub fn decode(png: &[u8]) -> Result<Image, String> {
     }
     let alpha = (!alpha.is_empty()).then_some(alpha);
     // Ink: a visible pixel clearly darker than paper. A blank canvas has none.
-    let inked =
-        rgb.chunks_exact(3).enumerate().filter(|(i, c)| alpha.as_ref().is_none_or(|a| a[*i] >= 64) && (c[0] as u32 + c[1] as u32 + c[2] as u32) < 600).count();
+    let inked = rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| alpha.as_ref().is_none_or(|a| a[*i] >= 64) && (c[0] as u32 + c[1] as u32 + c[2] as u32) < 600)
+        .count();
     if inked < 20 {
         return Err("the signature image is empty: draw your signature".into());
     }
