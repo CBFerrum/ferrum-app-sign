@@ -1,0 +1,170 @@
+- name: SignSettings
+  label: Sign Settings
+  kind: settings
+  module: sign
+  fields:
+    - {name: sender_name, type: data, max_length: 100, description: "Name signers see as the sender in emails and on the signing page (default: the workspace name)"}
+    - {name: public_url, type: url, label: Public URL, description: "Address this server is reached at from the internet (e.g. https://erp.example.com), for signing links in emails; empty = the Mail app's Public URL"}
+    - {name: link_expiry_days, type: int, default: 30, min: 1, max: 365, description: "Requests without an expiry date close this many days after they are sent; their signing links stop working then"}
+    - {name: reminder_every_days, type: int, default: 3, min: 0, max: 60, description: "Signers whose turn it is are reminded after this many days without signing, then at the same interval; 0 = no automatic reminders"}
+    - {name: max_reminders, type: int, default: 3, min: 0, max: 20, description: "Automatic reminders per signer at most"}
+    - {name: signing_key, type: secret, read_only: true, hidden: true, description: "HMAC key that signs signer links and salts IP hashes; created automatically. Rotating it retires every outstanding link"}
+  actions:
+    - {name: rotate_signing_key, label: Rotate Signing Key, permission: write, confirm: "Every signing link sent so far stops working; use Resend Links on open requests afterwards. Continue?"}
+
+- name: SignTemplateRole
+  label: Sign Template Role
+  kind: child
+  fields:
+    - {name: role, type: data, required: true, max_length: 60, in_list: true, description: "e.g. Client or Company: fields are placed per role"}
+    - {name: signing_order, type: int, label: Order, default: 1, min: 1, max: 50, in_list: true, description: "Sequential requests go to lower numbers first; equal numbers sign in parallel"}
+    - {name: default_name, type: data, max_length: 140, in_list: true}
+    - {name: default_email, type: email, in_list: true, description: "Prefilled for this role on new requests (e.g. your own signatory)"}
+
+- name: SignField
+  label: Sign Field
+  kind: child
+  fields:
+    - {name: role, type: data, required: true, max_length: 60, in_list: true, description: "The signer role that fills this field"}
+    - {name: field_type, type: select, label: Type, required: true, default: Signature, options: [Signature, Initials, Date Signed, Name, Text, Checkbox], in_list: true}
+    - {name: label, type: data, max_length: 100, in_list: true, description: "Shown to the signer, e.g. Company name"}
+    - {name: page, type: int, required: true, default: 1, min: 1, max: 1000, in_list: true}
+    - {name: x, type: decimal, required: true, min: 0, max: 14400, in_list: true, description: "Points (1/72 inch) from the left edge of the page as displayed"}
+    - {name: y, type: decimal, required: true, min: 0, max: 14400, in_list: true, description: "Points from the top edge of the page as displayed"}
+    - {name: width, type: decimal, required: true, min: 4, max: 14400, in_list: true}
+    - {name: height, type: decimal, required: true, min: 4, max: 14400, in_list: true}
+    - {name: required, type: check, default: true, in_list: true}
+    - {name: value, type: text, read_only: true, no_copy: true, description: "What the signer entered (name, date, text, Yes/No; signatures are kept on the signer)"}
+
+- name: SignTemplate
+  label: Sign Template
+  kind: master
+  module: sign
+  title_field: template_name
+  search_fields: [document_name]
+  description: "A reusable PDF with signer roles and field placements. Create Request makes a draft Sign Request from it."
+  fields:
+    - {name: template_name, type: data, required: true, unique: true, max_length: 140, in_list: true}
+    - {name: title, type: data, max_length: 200, description: "Title of requests made from this template (default: the template name)"}
+    - {name: message, type: text, max_length: 5000, description: "Message to signers on requests made from this template"}
+    - {name: document, type: attach, required: true, description: "The PDF: upload it with POST /api/files and set its /files/<id> path"}
+    - {name: document_name, type: data, read_only: true, no_copy: true}
+    - {name: document_sha256, type: data, label: Document SHA-256, read_only: true, no_copy: true}
+    - {name: page_count, type: int, read_only: true, no_copy: true}
+    - {name: page_sizes, type: json, read_only: true, hidden: true, no_copy: true, description: "[[width, height], ...] of each page as displayed, in points"}
+    - {name: signing_mode, type: select, options: [Sequential, Parallel], default: Sequential, required: true}
+    - {name: expiry_days, type: int, min: 1, max: 365, description: "Days requests made from this template stay open (default: Sign Settings)"}
+    - {name: roles, type: table, of: SignTemplateRole, required: true}
+    - {name: fields, type: table, of: SignField}
+    - {name: disabled, type: check, in_list: true, in_filter: true}
+  actions:
+    - {name: create_request, label: Create Request, permission: read, condition: "!doc.disabled"}
+  form:
+    - {label: Template, fields: [template_name, title, signing_mode, expiry_days, disabled, message]}
+    - {label: Document, fields: [document, document_name, page_count, document_sha256]}
+    - {label: Roles, fields: [roles]}
+    - {label: Fields, fields: [fields]}
+  list: {columns: [template_name, signing_mode, page_count, disabled], sort: template_name asc}
+
+- name: SignRequestSigner
+  label: Signer
+  kind: child
+  fields:
+    - {name: role, type: data, required: true, max_length: 60, in_list: true, description: "e.g. Client; fields name the role that fills them"}
+    - {name: name, type: data, max_length: 140, in_list: true}
+    - {name: email, type: email, in_list: true}
+    - {name: signing_order, type: int, label: Order, default: 1, min: 1, max: 50, in_list: true, description: "Sequential requests go to lower numbers first; equal numbers sign in parallel"}
+    - {name: access_code, type: data, max_length: 64, description: "Optional code the signer must also enter (tell them separately); kept only as a hash"}
+    - {name: access_code_hash, type: data, read_only: true, hidden: true, no_copy: true}
+    - {name: status, type: select, options: [Waiting, Sent, Viewed, Signed, Declined], default: Waiting, read_only: true, no_copy: true, in_list: true}
+    - {name: sent_at, type: datetime, read_only: true, no_copy: true}
+    - {name: viewed_at, type: datetime, read_only: true, no_copy: true}
+    - {name: signed_at, type: datetime, read_only: true, no_copy: true, in_list: true}
+    - {name: declined_at, type: datetime, read_only: true, no_copy: true}
+    - {name: decline_reason, type: text, read_only: true, no_copy: true}
+    - {name: ip_hash, type: data, label: IP Hash, read_only: true, no_copy: true, description: "Salted hash of the address the signer signed or declined from"}
+    - {name: user_agent, type: data, max_length: 500, read_only: true, no_copy: true}
+    - {name: signature_image, type: text, read_only: true, hidden: true, no_copy: true}
+    - {name: signature_text, type: data, read_only: true, no_copy: true}
+    - {name: initials_image, type: text, read_only: true, hidden: true, no_copy: true}
+    - {name: initials_text, type: data, read_only: true, no_copy: true}
+    - {name: reminders_sent, type: int, read_only: true, no_copy: true}
+    - {name: last_reminded_at, type: datetime, read_only: true, no_copy: true}
+    - {name: failed_attempts, type: int, read_only: true, hidden: true, no_copy: true}
+    - {name: locked_until, type: datetime, read_only: true, hidden: true, no_copy: true}
+    - {name: submission_hash, type: data, read_only: true, hidden: true, no_copy: true}
+
+- name: SignRequest
+  label: Sign Request
+  kind: document
+  module: sign
+  title_field: title
+  numbering: {template: "SIGN-{YYYY}-{seq:5}"}
+  search_fields: [document_name, reference_id]
+  description: "A PDF sent to one or more signers, in order or in parallel. Each signer gets a secure link; when the last one signs, the values are stamped onto the PDF, an audit certificate page is appended and the sealed PDF is kept with its SHA-256."
+  fields:
+    - {name: title, type: data, required: true, max_length: 200, in_list: true}
+    - {name: status, type: select, options: [Draft, Sent, In Progress, Completed, Declined, Expired, Voided], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
+    - {name: message, type: text, max_length: 5000, description: "Shown to signers in the email and on the signing page"}
+    - {name: document, type: attach, required: true, description: "The PDF to sign: upload it with POST /api/files and set its /files/<id> path"}
+    - {name: document_name, type: data, read_only: true, no_copy: true}
+    - {name: document_sha256, type: data, label: Document SHA-256, read_only: true, no_copy: true}
+    - {name: page_count, type: int, read_only: true, no_copy: true}
+    - {name: page_sizes, type: json, read_only: true, hidden: true, no_copy: true, description: "[[width, height], ...] of each page as displayed, in points"}
+    - {name: signing_mode, type: select, options: [Sequential, Parallel], default: Sequential, required: true, in_filter: true}
+    - {name: expires_on, type: date, in_list: true, description: "Last day to sign, in the workspace's time zone; empty = Sign Settings' link expiry after sending"}
+    - {name: expires_at, type: datetime, read_only: true, no_copy: true, description: "The moment signing links stop working (the end of the expiry day)"}
+    - {name: reference_entity, type: data, max_length: 64, in_filter: true, description: "The record this request is about, e.g. Quotation"}
+    - {name: reference_id, type: data, max_length: 36, in_filter: true}
+    - {name: template, type: link, to: SignTemplate, read_only: true, on_delete: set_null, in_filter: true}
+    - {name: sender_email, type: email, read_only: true, no_copy: true}
+    - {name: sent_at, type: datetime, read_only: true, no_copy: true, in_list: true}
+    - {name: completed_at, type: datetime, read_only: true, no_copy: true}
+    - {name: void_reason, type: text, read_only: true, no_copy: true}
+    - {name: sealed_document, type: attach, read_only: true, no_copy: true, description: "The signed PDF with its audit certificate"}
+    - {name: sealed_sha256, type: data, label: Sealed SHA-256, read_only: true, no_copy: true}
+    - {name: seal_error, type: text, read_only: true, hidden: true, no_copy: true, description: "Why sealing last failed (it is retried)"}
+    - {name: signers, type: table, of: SignRequestSigner}
+    - {name: fields, type: table, of: SignField}
+  indexes: [[status, expires_at], [reference_entity, reference_id], [sealed_sha256]]
+  actions:
+    - {name: send, label: Send for Signature, permission: write, condition: "doc.status == 'Draft'"}
+    - {name: remind, label: Send Reminder, permission: write, condition: "doc.status == 'Sent' || doc.status == 'In Progress'"}
+    - {name: resend, label: Resend Links, permission: write, condition: "doc.status == 'Sent' || doc.status == 'In Progress'"}
+    - {name: void, label: Void, permission: write, condition: "doc.status == 'Sent' || doc.status == 'In Progress'", confirm: "Signers will no longer be able to sign. Continue?"}
+    - {name: verify, label: Verify Integrity, permission: read, condition: "doc.status != 'Draft'"}
+  form:
+    - {label: Request, fields: [title, status, signing_mode, expires_on, message]}
+    - {label: Document, fields: [document, document_name, page_count, document_sha256]}
+    - {label: Signers, fields: [signers]}
+    - {label: Fields, fields: [fields]}
+    - {label: Linked Record, collapsible: true, fields: [reference_entity, reference_id, template]}
+    - {label: Result, fields: [sent_at, expires_at, completed_at, sealed_document, sealed_sha256, void_reason, sender_email]}
+  list: {columns: [number, title, status, sent_at, expires_on], sort: created_at desc}
+
+- name: SignEvent
+  label: Sign Event
+  kind: master
+  module: sign
+  title_field: event
+  owner_fields: [sender]
+  description: "The append-only audit trail of sign requests: each event is chained to the previous one by SHA-256, and Verify Integrity recomputes the chain."
+  fields:
+    - {name: request, type: link, to: SignRequest, required: true, on_delete: cascade, in_list: true, in_filter: true}
+    - {name: seq, type: int, label: No., required: true, in_list: true}
+    - {name: event, type: select, required: true, in_list: true, in_filter: true,
+       options: [Sent, Viewed, Signed, Declined, Reminded, Resent, Corrected, Access Denied, Voided, Expired, Completed]}
+    - {name: occurred_at, type: datetime, label: Time, required: true, in_list: true}
+    - {name: role, type: data, max_length: 60}
+    - {name: signer_name, type: data, max_length: 140}
+    - {name: signer_email, type: email, in_list: true, in_filter: true}
+    - {name: actor, type: data, max_length: 200, description: "Who acted: the signer, a user's email, or system"}
+    - {name: ip_hash, type: data, label: IP Hash}
+    - {name: user_agent, type: data, max_length: 500}
+    - {name: details, type: text, max_length: 2000}
+    - {name: sender, type: email, description: "The request's sender (who may read its trail)"}
+    - {name: prev_hash, type: data, label: Previous Hash}
+    - {name: event_hash, type: data, label: Event Hash}
+  unique: [[request, seq]]
+  indexes: [[occurred_at]]
+  list: {columns: [occurred_at, request, event, signer_email], sort: created_at desc}

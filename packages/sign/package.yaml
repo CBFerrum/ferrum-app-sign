@@ -1,0 +1,28 @@
+package: sign
+version: 0.1.0
+label: Sign
+description: Electronic signatures - send PDFs for signing in order or in parallel, place fields per signer, sign by secure link, sealed PDFs with an audit certificate and a hash-chained audit trail.
+depends: [core]
+
+modules:
+  - name: sign
+    label: Sign
+    icon: file-signature
+    order: 47
+    items: [SignRequest, SignTemplate, SignEvent, SignSettings, report:sign_requests_by_status, report:sign_completion_time, report:sign_pending_signatures]
+
+roles:
+  - name: Sign User
+    description: Sends their own documents for signature (uploads or templates), follows them and reads their audit trails.
+    permissions:
+      - {entity: SignRequest, read: true, write: true, create: true, delete: true, export: true, if_owner: true}
+      - {entity: SignEvent, read: true, if_owner: true}
+      - {entity: SignTemplate, read: true}
+      - {entity: SignSettings, read: true}
+  - name: Sign Manager
+    description: Every sign request and audit trail, templates and Sign Settings (including rotating the signing key).
+    permissions:
+      - {entity: SignRequest, read: true, write: true, create: true, delete: true, export: true}
+      - {entity: SignEvent, read: true, export: true}
+      - {entity: SignTemplate, read: true, write: true, create: true, delete: true, export: true, import: true}
+      - {entity: SignSettings, read: true, write: true, create: true}
