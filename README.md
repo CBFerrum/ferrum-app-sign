@@ -229,6 +229,15 @@ cargo test
 `FERRUM_SIGN_TEST_DATABASE_URL` overrides the database URL.
 
 
+Its tests also build on [ferrum-app-comms](https://github.com/CBFerrum/ferrum-app-comms), which Cargo takes from GitHub.
+To work on it alongside this app, clone it into the same folder and add to the same file:
+
+```toml
+[patch."https://github.com/CBFerrum/ferrum-app-comms"]
+ferrum-app-comms = { path = "../ferrum-app-comms" }
+```
+
+
 ### Project layout
 
 ```text
@@ -238,9 +247,6 @@ src/          the app's logic in Rust: hooks, actions, endpoints, upkeep jobs
 tests/        integration tests against a real PostgreSQL
 CHANGELOG.md  what changed in each version
 ```
-
-
-It builds on [ferrum-app-comms](https://github.com/CBFerrum/ferrum-app-comms).
 
 ## Changelog
 
