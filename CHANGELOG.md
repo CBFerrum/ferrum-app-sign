@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Personal data: a person's request now exports their signing events and the requests they sent, and says why they are kept: they are the evidence of a signature.
 - Emails no longer need the Mail app: without it, invitations, reminders and withdrawals go
   through the server's mailer, and the completion email carries the signed PDF when the mailer
   can attach files.

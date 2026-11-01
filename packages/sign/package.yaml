@@ -26,3 +26,6 @@ roles:
       - {entity: SignEvent, read: true, export: true}
       - {entity: SignTemplate, read: true, write: true, create: true, delete: true, export: true, import: true}
       - {entity: SignSettings, read: true, write: true, create: true}
+personal_data:
+  - {entity: SignEvent, match: signer_email, retain: "Evidence of the signature: erasing it would undo what was signed"}
+  - {entity: SignRequest, match: sender_email, retain: "Evidence of the signature: erasing it would undo what was signed"}
