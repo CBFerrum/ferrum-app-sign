@@ -22,7 +22,7 @@ fn base(url: Option<String>) -> Option<String> {
 }
 
 /// The tenant's settings, with defaults when nobody saved them yet. The public URL falls back to
-/// the Mail app's when Sign has none.
+/// the Mail app's when Sign has none, then to the workspace's own address.
 pub async fn load(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<Settings> {
     type Row = (Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>);
     let row: Option<Row> = sqlx::query_as(
@@ -36,6 +36,9 @@ pub async fn load(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<Settings> {
     if public_url.is_none() && ctx.schema.entity("CommsSettings").is_some() {
         let comms = k.find_tx(&ferrum_domain::util::sys(ctx), tx, "CommsSettings", &[] as &[Filter], None, 1).await?;
         public_url = base(comms.first().and_then(|d| s(d, "public_url")).map(str::to_string));
+    }
+    if public_url.is_none() {
+        public_url = base(k.link_base(ctx.tenant).await);
     }
     let sender_name = match sender.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
         Some(v) => v,
