@@ -33,7 +33,7 @@ step.
 | 🗃️ Records | 7 entities in 1 package |
 | 👥 Roles | 2: Sign User, Sign Manager |
 | 📊 Reports | 3 |
-| 🧪 Tests | 16 Rust tests, 105 interface tests |
+| 🧪 Tests | 16 Rust tests, 106 interface tests |
 
 
 > [!IMPORTANT]
