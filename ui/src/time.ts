@@ -28,9 +28,9 @@ export function moment(iso: string | null | undefined): string {
   return t.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 }
 
-/** A deadline with its year, for the signer's page: "14 Nov 2026, 5:00 pm". */
+/** A deadline with its year and the zone it is told in, for the signer's page: "14 Nov 2026, 5:00 pm IST". */
 export function deadline(iso: string | null | undefined): string {
   const t = iso ? new Date(iso) : null;
   if (!t || Number.isNaN(t.getTime())) return "";
-  return t.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return t.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
 }

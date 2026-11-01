@@ -31,6 +31,7 @@ import {
   problemsOf,
   progress,
   type Reached,
+  sentence,
   signBody,
   type SigningField,
   type SigningView,
@@ -118,14 +119,7 @@ export function SigningPage() {
       return (
         <Frame>
           <Notice icon={<Clock size={22} />} title="Too many wrong codes" text={phase.message}>
-            <Button
-              onClick={() => {
-                code.current = "";
-                void open();
-              }}
-            >
-              Try again
-            </Button>
+            <Button onClick={() => void open()}>Try again</Button>
           </Notice>
         </Frame>
       );
@@ -385,13 +379,14 @@ export function Ready({
       if (r.status === 422) {
         const found = problemsOf(Array.isArray(body?.fields) ? body.fields : [], fields);
         setProblems(found);
-        setError(Object.keys(found).length ? null : (body?.message ?? "Something in your answers wasn't accepted."));
+        setError(Object.keys(found).length ? null : sentence(body?.message ?? "") || "Something in your answers wasn't accepted.");
         return;
       }
-      // Spent, withdrawn, locked, or signed already in another tab: the page says so.
-      if ([401, 403, 404, 410, 429].includes(r.status)) return onChange(classify(r.status, body, hasCode));
+      // Spent or withdrawn, or signed already in another tab: the page says so. Anything else
+      // (a busy server, a code that stopped working) leaves what was filled in where it is.
+      if (r.status === 404 || r.status === 410) return onChange(classify(r.status, body, hasCode));
       if (r.status === 409) return reopen();
-      setError(body?.message ?? `Something went wrong (${r.status}).`);
+      setError(sentence(body?.message ?? "") || `Something went wrong (${r.status}).`);
     } catch {
       setError(OFFLINE);
     } finally {
@@ -407,11 +402,11 @@ export function Ready({
         onDeclined();
         return null;
       }
-      if ([401, 403, 404, 410, 429].includes(r.status)) {
+      if (r.status === 404 || r.status === 410) {
         onChange(classify(r.status, body, hasCode));
         return null;
       }
-      return body?.fields?.[0]?.message ?? body?.message ?? `Something went wrong (${r.status}).`;
+      return sentence(body?.fields?.[0]?.message ?? body?.message ?? "") || `Something went wrong (${r.status}).`;
     } catch {
       return OFFLINE;
     }
@@ -880,7 +875,7 @@ function DocumentLink({ base, hasCode, call, name, pages }: { base: string; hasC
 
 // ───────────────────────── declining, and what this signature is ─────────────────────────
 
-function DeclineDialog({ open, onClose, onDecline }: { open: boolean; onClose: () => void; onDecline: (reason: string) => Promise<string | null> }) {
+export function DeclineDialog({ open, onClose, onDecline }: { open: boolean; onClose: () => void; onDecline: (reason: string) => Promise<string | null> }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -921,7 +916,7 @@ function DeclineDialog({ open, onClose, onDecline }: { open: boolean; onClose: (
   );
 }
 
-function AboutDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
     <Dialog open={open} onClose={onClose} title="What kind of signature this is" footer={<Button variant="primary" onClick={onClose}>Got it</Button>}>
       <div className="stack sg-about" style={{ gap: 10 }}>

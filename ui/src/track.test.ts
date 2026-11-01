@@ -116,6 +116,16 @@ describe("what a check found", () => {
     expect(lines[2].detail).toBe("6 events, each tied to the one before it.");
   });
 
+  it("gives the fingerprints recorded and found, to compare", () => {
+    const v: Verify = { valid: false, original: { ok: false, sha256: "bb", expected: "aa" }, sealed: { ok: true, sha256: "cc", expected: "cc", readable: true }, audit_trail: { ok: true, events: 3 } };
+    expect(checks(v).map((c) => [c.recorded, c.found])).toEqual([
+      ["aa", "bb"],
+      ["cc", "cc"],
+      [undefined, undefined],
+    ]);
+    expect(checks({ ...v, original: { ok: false, error: "the stored file is missing", expected: "aa" } })[0]).toMatchObject({ recorded: "aa", found: undefined });
+  });
+
   it("leaves out the signed copy until there is one", () => {
     expect(checks({ ...ok, sealed: null }).map((l) => l.label)).toEqual(["The original document", "The audit trail"]);
   });

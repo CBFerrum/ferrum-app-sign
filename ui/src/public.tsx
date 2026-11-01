@@ -3,6 +3,7 @@
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { shell } from "@ferrum/client";
+import { Toaster } from "@ferrum/kit";
 import { SigningPage } from "./SignPage";
 
 function Started() {
@@ -14,5 +15,6 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <Started />
     <SigningPage />
+    <Toaster />
   </StrictMode>,
 );
