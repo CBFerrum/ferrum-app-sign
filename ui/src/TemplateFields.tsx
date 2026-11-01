@@ -71,7 +71,7 @@ function TemplateFields({ template }: { template: Template }) {
         </div>
       </header>
       {error && <Alert tone="error">{error}</Alert>}
-      <Editor ed={ed} roles={roles} pages={pageSizes(template)} onPdf={() => download(template.document ?? "", template.document_name ?? "template.pdf").catch((e) => toast(errorMessage(e), "error"))} />
+      <Editor ed={ed} roles={roles} pages={pageSizes(template)} document={template.document} onPdf={() => download(template.document ?? "", template.document_name ?? "template.pdf").catch((e) => toast(errorMessage(e), "error"))} />
       {dialog}
     </div>
   );

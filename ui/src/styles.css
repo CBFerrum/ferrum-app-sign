@@ -152,7 +152,16 @@
   box-shadow: var(--shadow);
 }
 
-/* The sheet is the page's shape, not its picture: its number says so. */
+/* The page itself, over the sheet and under the boxes. A document stays white in dark mode. */
+.sg-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+}
+
+/* Without the page's picture the sheet is its shape: its number says so. */
 .sg-sheet::before {
   position: absolute;
   inset: 0;

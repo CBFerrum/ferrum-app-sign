@@ -193,6 +193,7 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
           ed={ed}
           roles={roles}
           pages={pages}
+          document={request.document}
           onPdf={() => download(request.document ?? "", request.document_name ?? "document.pdf").catch((e) => toast(errorMessage(e), "error"))}
         />
       )}
