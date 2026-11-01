@@ -1,6 +1,6 @@
 id: sign
 name: Sign
-version: 0.1.0
+version: 0.2.0
 publisher: cbferrum
 summary: "Electronic signatures: send PDFs for signing in order, place fields, sign by secure link, sealed PDFs with an audit trail and certificate"
 description: README.md
@@ -12,3 +12,26 @@ runtime: native
 platform: ">=0.3, <0.4"
 packages: [sign]
 uninstall: ask
+# Its own interface at /sign/ (Ferrum docs/plan/apps-ui.md): the requests and where each one stands,
+# sending one (the signers, the boxes placed on the pages), templates, and the page signers open
+# from their link with no account (ui/, built into ui/dist).
+ui:
+  dist: ui/dist
+contributes:
+  shell.app:
+    - id: sign
+      route: sign
+      title: Sign
+      description: Send documents to be signed and follow them
+      icon: signature
+      color: "#4f46e5"
+      roles: [Sign User, Sign Manager]
+  shell.open:
+    # A request opens on its page (a draft in its preparation); its other records, in the frame.
+    - {id: request, entity: SignRequest, path: "sign/request/{id}", list: sign/, priority: 1}
+    - {id: sign, package: sign, path: "sign/e/{entity}/{id}", list: "sign/e/{entity}"}
+  shell.create:
+    - {id: request, label: Signature request, path: sign/new, entity: SignRequest}
+  # What a signer opens from their link: /sign/s/{workspace}/{token}, with no sign-in.
+  shell.public:
+    - {id: sign, path: sign/s, title: Sign a document}
