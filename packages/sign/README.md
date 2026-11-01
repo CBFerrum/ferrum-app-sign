@@ -152,7 +152,7 @@ their link: the others get **403**.
 
 | Method & path | Request | Response |
 |---|---|---|
-| `GET /s/{token}` | — | the signing page: self-contained HTML (no outside resources; CSP with a per-response nonce) that drives the endpoints below — PDF preview, the signer's fields, signature pad (draw or type), consent, sign, decline |
+| `GET /s/{token}` | — | the signing page of last resort: self-contained HTML (no outside resources; CSP with a per-response nonce) that drives the endpoints below — PDF preview, the signer's fields, signature pad (draw or type), consent, sign, decline. Where the workspace serves the app's own interface it hands over to that page, `/sign/s/{workspace}/{token}`, which uses the same endpoints; links already sent work either way |
 | `GET /signing/{token}` | — | `{request: {number, title, message, status, signing_mode, expires_at, document_name, document_sha256, pages: [{page, width, height}], sender: {organization, name, email}}, signer: {role, name, email, status}, fields: [{id, field_type, label, page, x, y, width, height, required}], needs: {signature, initials}, consent}` — only this signer's fields. The first access records `Viewed` |
 | `GET /signing/{token}/document` | — | the original PDF (`application/pdf`), served only while its SHA-256 still matches (otherwise 503) |
 | `POST /signing/{token}/sign` | `{consent: true, signature: {image: "data:image/png;base64,..."} \| {text}, initials?: {image} \| {text}, values?: {"<field id>": "text" \| true \| false}}` (≤ 1 MB) | `{status: "Signed", request_status, replayed}`; `request_status` is `Completed` when this signature sealed the document |
