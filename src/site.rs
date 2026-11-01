@@ -1,7 +1,8 @@
 //! Public endpoints at `/api/site/{tenant}/sign/...` — signers have no account; their link's
 //! token authenticates them:
 //!
-//! * `GET /s/{token}` — the signing page (self-contained HTML; it calls the endpoints below)
+//! * `GET /s/{token}` — the signing page (self-contained HTML; it calls the endpoints below, or
+//!   hands over to the interface's own page at `/sign/s/{workspace}/{token}` where it is served)
 //! * `GET /signing/{token}` — the request with this signer's fields only
 //! * `GET /signing/{token}/document` — the original PDF
 //! * `POST /signing/{token}/sign` — `{consent, signature, initials?, values?}`
@@ -70,8 +71,10 @@ fn pdf_response(name: &str, bytes: Vec<u8>) -> SiteResponse {
     }
 }
 
-/// The signing page. Any well-formed token gets the same static page (its script asks the API);
-/// it loads nothing from elsewhere and runs only its own script.
+/// The signing page of last resort. Any well-formed token gets the same static page (its script
+/// asks the API); it loads nothing from elsewhere and runs only its own script. Where the
+/// workspace serves Sign's own interface (`ui/`, at `/sign/s/{workspace}/{token}`) the script hands
+/// over to it; links already sent keep working either way.
 fn page(token_str: &str) -> Result<SiteResponse> {
     if token::parse(token_str).is_none() {
         return Err(Error::NotFound("signing link".into()));
@@ -139,6 +142,24 @@ label.check{display:flex;gap:8px;align-items:flex-start;font-weight:400}ul{paddi
     return m;
   };
   const initialsOf = (n) => (n || '').split(/\s+/).filter(Boolean).map(w => w[0].toUpperCase()).slice(0, 4).join('');
+
+  // Where the workspace serves Sign's own interface, its page takes over: the same link, the same
+  // endpoints. The answer has to be that very page (a sign-in or an error page may also answer), and
+  // if it is slow or not there this page does the job itself.
+  async function forward() {
+    const m = location.pathname.match(/^(.*)\/api\/site\/([^/]+)\/sign\/s\/([^/]+)$/);
+    if (!m) return false;
+    const to = m[1] + '/sign/s/' + m[2] + '/' + m[3];
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), 2500);
+    try {
+      const r = await fetch(to, {cache: 'no-store', credentials: 'omit', redirect: 'manual', signal: stop.signal});
+      const html = r.ok ? await r.text() : '';
+      if (!html.includes('"kind":"public"') || !html.includes('"public":"sign/s"')) return false;
+      location.replace(to);
+      return true;
+    } catch (_) { return false; } finally { clearTimeout(timer); }
+  }
 
   async function start() {
     const r = await call('');
@@ -260,7 +281,7 @@ label.check{display:flex;gap:8px;align-items:flex-start;font-weight:400}ul{paddi
       h('div', {class: 'row'}, h('button', {class: 'danger', text: 'Decline', onclick: send}), h('button', {text: 'Back', onclick: () => start()}))));
   }
 
-  start().catch((e) => say('Not available', 'The page could not load: ' + e.message));
+  forward().then((gone) => gone || start()).catch((e) => say('Not available', 'The page could not load: ' + e.message));
 })();
 </script></body></html>
 "#;
@@ -279,5 +300,7 @@ mod tests {
         assert!(html.contains(&format!("<script nonce=\"{nonce}\">")) && !html.contains("__NONCE__"));
         assert!(!html.contains("src=\"http") && !html.contains("href=\"http"), "nothing from elsewhere");
         assert!(csp.contains("default-src 'none'") && csp.contains("frame-ancestors 'none'"));
+        // Handing over to the interface is a request to the page's own origin, which `connect-src 'self'` allows.
+        assert!(csp.contains("connect-src 'self'") && html.contains("'/sign/s/' + m[2] + '/' + m[3]"));
     }
 }
