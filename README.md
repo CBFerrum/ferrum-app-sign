@@ -33,7 +33,7 @@ step.
 | 🗃️ Records | 7 entities in 1 package |
 | 👥 Roles | 2: Sign User, Sign Manager |
 | 📊 Reports | 3 |
-| 🧪 Tests | 15 Rust tests |
+| 🧪 Tests | 16 Rust tests, 105 interface tests |
 
 
 > [!IMPORTANT]
@@ -212,6 +212,7 @@ Point the platform dependencies at your checkout (this file is git-ignored):
 ```toml
 # .cargo/config.toml
 [patch."https://github.com/CBFerrum/Ferrum"]
+ferrum-apps = { path = "../ferrum/crates/apps" }
 ferrum-calc = { path = "../ferrum/crates/calc" }
 ferrum-domain = { path = "../ferrum/crates/domain" }
 ferrum-kernel = { path = "../ferrum/crates/kernel" }
@@ -238,12 +239,26 @@ ferrum-app-comms = { path = "../ferrum-app-comms" }
 ```
 
 
+The interface lives in `ui/` and builds with Ferrum-Frontend's packages (clone it as `ferrum/web`
+next to this app, as CI does):
+
+```bash
+cd ui
+npm run build      # ui/dist, checked against the size budget
+npm test
+```
+
+It has two entries that never load each other: the page a signer opens from their link (no
+sign-in, `shell.public`), and the app for people who are signed in. The platform serves it once
+`ferrum_app_sign::UI` is among the interfaces the server compiles in.
+
 ### Project layout
 
 ```text
 app.yaml      the manifest: id, version, requirements, what it adds to Ferrum
 packages/     metadata: entities, roles, reports, workflows, print formats
 src/          the app's logic in Rust: hooks, actions, endpoints, upkeep jobs
+ui/           its own interface (React + Vite), built into ui/dist
 tests/        integration tests against a real PostgreSQL
 CHANGELOG.md  what changed in each version
 ```
@@ -252,6 +267,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.2.0** | A page made for signers (their boxes in place, one button through what is left, plainly what kind of signature it is), sending a request in steps with boxes placed by dragging or from the keyboard, and following each request: who is holding it up, reminders, the trail told in words, a check of integrity, the signed copy. |
 | **0.1.0** | First release. Sign requests send a PDF — uploaded or from a reusable template, optionally linked to any record — to signers in a sequential … |
 
 Every version is in [CHANGELOG.md](CHANGELOG.md).

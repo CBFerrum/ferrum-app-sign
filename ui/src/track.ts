@@ -158,6 +158,9 @@ export interface Check {
   label: string;
   ok: boolean;
   detail: string;
+  /** The fingerprint recorded, and the one found now, when there is one to compare. */
+  recorded?: string;
+  found?: string;
 }
 
 /** What a check found, line by line. */
@@ -167,6 +170,8 @@ export function checks(v: Verify): Check[] {
       label: "The original document",
       ok: v.original.ok,
       detail: v.original.ok ? "Stored unchanged: it still has the fingerprint recorded when it was sent." : (v.original.error ?? "It no longer matches the fingerprint recorded when it was sent."),
+      recorded: v.original.expected ?? undefined,
+      found: v.original.sha256,
     },
   ];
   if (v.sealed) {
@@ -176,6 +181,8 @@ export function checks(v: Verify): Check[] {
       detail: v.sealed.ok
         ? "Stored unchanged, and it opens as a PDF."
         : (v.sealed.error ?? (v.sealed.readable === false ? "It can't be read as a PDF." : "It no longer matches the fingerprint recorded when it was sealed.")),
+      recorded: v.sealed.expected ?? undefined,
+      found: v.sealed.sha256,
     });
   }
   out.push({

@@ -7,7 +7,11 @@ import type { SignRequest } from "./model";
 import { draftOf } from "./send";
 import { Review, SignersStep } from "./Prepare";
 import { RequestView } from "./RequestPage";
-import { Ready } from "./SignPage";
+import { LinksDialog } from "./Links";
+import { MarkPad, MarkView } from "./Pad";
+import { Requests } from "./Requests";
+import { AboutDialog, DeclineDialog, Ready } from "./SignPage";
+import { TemplateCards } from "./Templates";
 import type { SigningView } from "./signing";
 
 vi.stubGlobal("window", { location: { pathname: "/sign/s/acme/TOKEN" }, matchMedia: () => ({ matches: false }), addEventListener() {}, removeEventListener() {} });
@@ -165,5 +169,96 @@ describe("the screen that follows a request", () => {
     expect(inApp(<RequestView request={declined} />)).toContain("Wrong amount");
     expect(inApp(<RequestView request={request({ status: "Voided", void_reason: "Sent in error" })} />)).toContain("Sent in error");
     expect(inApp(<RequestView request={request({ status: "Expired" })} />)).toContain("The last day to sign passed");
+  });
+});
+
+describe("what a signer is asked for", () => {
+  it("offers drawing and typing, with the name ready to type", () => {
+    const html = renderToStaticMarkup(<MarkPad kind="signature" typed="Jane Doe" onChange={() => {}} />);
+    expect(html).toContain("Draw");
+    expect(html).toContain("Type");
+    expect(html).toContain('value="Jane Doe"');
+    expect(html).toContain("Drawing area for your signature");
+    expect(renderToStaticMarkup(<MarkPad kind="initials" typed="JD" onChange={() => {}} />)).toContain('value="JD"');
+  });
+
+  it("shows a mark as the image or the text it is", () => {
+    expect(renderToStaticMarkup(<MarkView mark={{ image: "data:image/png;base64,AAAA" }} />)).toContain("<img");
+    expect(renderToStaticMarkup(<MarkView mark={{ text: "Jane Doe" }} />)).toContain("Jane Doe");
+  });
+
+  it("asks why before declining, and says it ends the request for everyone", () => {
+    const html = renderToStaticMarkup(<DeclineDialog open onClose={() => {}} onDecline={async () => null} />);
+    expect(html).toContain("for everyone");
+    expect(html).toContain("Why are you declining?");
+  });
+
+  it("says plainly what this signature is not", () => {
+    const html = renderToStaticMarkup(<AboutDialog open onClose={() => {}} />);
+    expect(html).toContain("electronic signature with an audit trail");
+    expect(html).toContain("not</strong> a PAdES signature");
+    expect(html).toContain("qualified");
+  });
+});
+
+describe("the lists", () => {
+  const client = () => {
+    const c = new QueryClient();
+    const rows = [
+      { id: "r1", version: 1, title: "Master Services Agreement", number: "SIGN-2026-00012", status: "In Progress", document_name: "msa.pdf", expires_at: "2099-01-01T00:00:00.000Z", signing_mode: "Sequential", created_at: "2026-11-01T09:00:00.000Z" },
+      { id: "r2", version: 1, title: "NDA", number: "SIGN-2026-00013", status: "Draft", document_name: "nda.pdf", signing_mode: "Sequential", created_at: "2026-11-01T10:00:00.000Z" },
+      { id: "r3", version: 1, title: "Lease", number: "SIGN-2026-00011", status: "Completed", completed_at: "2026-10-30T10:00:00.000Z", sealed_document: "/files/x", signing_mode: "Sequential", created_at: "2026-10-29T10:00:00.000Z" },
+    ];
+    c.setQueryData(["sign", "requests"], { pages: [{ rows }], pageParams: [""] });
+    c.setQueryData(["sign", "request", "r1"], request());
+    return c;
+  };
+  const draw = (c: QueryClient, node: React.ReactNode, at = "/") =>
+    renderToStaticMarkup(
+      <QueryClientProvider client={c}>
+        <MemoryRouter initialEntries={[at]}>{node}</MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+  it("opens on what is in progress, with who is holding each up", () => {
+    const html = draw(client(), <Requests />);
+    expect(html).toContain("Master Services Agreement");
+    expect(html).toContain("Waiting for Ravi Kumar");
+    expect(html).toContain('aria-label="1 of 3 signed"');
+    expect(html).not.toContain(">NDA<");
+    expect(html).toMatch(/In progress<span class="sg-count-chip">1<\/span>/);
+    expect(html).toMatch(/Drafts<span class="sg-count-chip">1<\/span>/);
+  });
+
+  it("shows the drafts, and the finished ones, on their own tabs", () => {
+    expect(draw(client(), <Requests />, "/?tab=drafts")).toContain(">NDA<");
+    expect(draw(client(), <Requests />, "/?tab=completed")).toContain(">Lease<");
+    expect(draw(client(), <Requests />, "/?tab=closed")).toContain("Nothing was declined");
+  });
+
+  it("starts a first-time workspace off", () => {
+    const empty = new QueryClient();
+    empty.setQueryData(["sign", "requests"], { pages: [{ rows: [] }], pageParams: [""] });
+    const html = draw(empty, <Requests />);
+    expect(html).toContain("Send your first document for signature");
+    expect(html).toContain("New request");
+  });
+
+  it("lists templates with what to do with each", () => {
+    const c = new QueryClient();
+    c.setQueryData(["sign", "templates"], [{ id: "t1", template_name: "Service Agreement", page_count: 3, signing_mode: "Sequential", document_name: "service.pdf" }]);
+    const html = draw(c, <TemplateCards />);
+    expect(html).toContain("Service Agreement");
+    expect(html).toContain("3 pages · Signed in order · service.pdf");
+    expect(html).toContain(">Use<");
+  });
+
+  it("gives out links to pass on, and says nothing was emailed", () => {
+    const html = renderToStaticMarkup(
+      <LinksDialog open title="Request sent" links={[{ role: "Client", name: "Jane Doe", email: "jane@client.test", emailed: false, url: "/api/site/acme/sign/s/TOKEN" }, { role: "Company", name: "Ravi", email: "ravi@acme.test", emailed: true }]} onClose={() => {}} />,
+    );
+    expect(html).toContain("nothing was emailed");
+    expect(html).toContain("Emailed");
+    expect(html).toContain("/api/site/acme/sign/s/TOKEN");
   });
 });

@@ -282,7 +282,7 @@ export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; 
       </div>
 
       <div className="sg-edit-body">
-        <div className="sg-stage">
+        <div className={pages.length > 40 ? "sg-stage sg-lazy" : "sg-stage"}>
           <p className="sg-note">The sheets are the size of your pages, not pictures of them. Keep the PDF open beside this screen to see where things go on each page.</p>
           {pages.map((size, i) => {
             const n = i + 1;

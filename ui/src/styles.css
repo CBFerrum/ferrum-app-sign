@@ -1296,6 +1296,10 @@ a.btn {
   flex: none;
   width: calc(min(100%, 52rem) * var(--zoom, 1));
   margin-inline: auto;
+}
+
+/* A long document draws only the pages near the screen (which clips a handle at a page's edge). */
+.sg-lazy .sg-page {
   content-visibility: auto;
   contain-intrinsic-size: auto 60rem;
 }
@@ -1775,4 +1779,29 @@ a.btn {
   .sg-req-body {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.sg-hashes {
+  margin-top: 0.25rem;
+  color: var(--muted-foreground);
+}
+
+.sg-hashes summary {
+  cursor: pointer;
+}
+
+.sg-hashes dl {
+  display: grid;
+  gap: 0.125rem;
+  margin: 0.25rem 0 0;
+}
+
+.sg-hashes dt {
+  font-size: 11.5px;
+}
+
+.sg-hashes dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }

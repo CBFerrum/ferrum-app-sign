@@ -381,6 +381,17 @@ function Integrity({ result, at }: { result: Verify; at: number }) {
             <div>
               <strong>{c.label}</strong>
               <div className="faint">{c.detail}</div>
+              {c.recorded && (
+                <details className="sg-hashes">
+                  <summary>Fingerprints (SHA-256)</summary>
+                  <dl>
+                    <dt>Recorded</dt>
+                    <dd className="mono">{c.recorded}</dd>
+                    <dt>Found now</dt>
+                    <dd className="mono">{c.found ?? "not readable"}</dd>
+                  </dl>
+                </details>
+              )}
             </div>
           </li>
         ))}

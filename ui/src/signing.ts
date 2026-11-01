@@ -70,7 +70,8 @@ export type Reached =
 
 const asText = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
-const sentence = (m: string) => (m ? m.charAt(0).toUpperCase() + m.slice(1) : m);
+/** The server's lower-case complaints, as sentences. */
+export const sentence = (m: string) => (m ? m.charAt(0).toUpperCase() + m.slice(1) : m);
 
 /** Reads the answer to opening a link. `sentCode`: whether an access code went with the request
  *  (a refusal then means the code was wrong, not that none was given). */
