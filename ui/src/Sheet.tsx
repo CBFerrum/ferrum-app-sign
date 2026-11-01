@@ -1,7 +1,5 @@
-// A page of the document as a sheet of its own proportions, for boxes to sit on. The sheet is not
-// the page's picture: the platform has no PDF renderer yet, so what the page says is read in the PDF
-// itself (the "Open the PDF" links), and the sheet shows where things go on it. When page images
-// exist they become the sheet's background and nothing else here changes.
+// A page of the document as a sheet of its own proportions, for boxes to sit on. The page's picture
+// (PdfPage) goes behind them; without one, the sheet still shows where things go on the page.
 
 import type { CSSProperties, ReactNode, Ref } from "react";
 import { placement, type Rect, type Size } from "./geometry";
@@ -17,6 +15,7 @@ export function Sheet({
   inner,
   note,
   className,
+  picture,
 }: {
   number: number;
   count: number;
@@ -27,6 +26,8 @@ export function Sheet({
   /** Beside the page's number: how many boxes it holds, say. */
   note?: ReactNode;
   className?: string;
+  /** The page itself, behind the boxes. */
+  picture?: ReactNode;
 }) {
   return (
     <section className="sg-page" id={`page-${number}`} aria-label={`Page ${number} of ${count}`}>
@@ -37,6 +38,7 @@ export function Sheet({
         {note && <span>{note}</span>}
       </header>
       <div ref={inner} data-sheet={number} className={`sg-sheet ${className ?? ""}`} style={{ aspectRatio: `${size.width} / ${size.height}` }}>
+        {picture}
         {children}
       </div>
     </section>

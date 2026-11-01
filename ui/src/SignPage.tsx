@@ -11,6 +11,7 @@ import { bootstrap, saveBlob } from "@ferrum/client";
 import { Alert, Badge, Button, Dialog, Field, Menu, MenuItem, Spinner, toast, useShellTitle } from "@ferrum/kit";
 import { copyText } from "./clipboard";
 import { MarkPad, MarkView } from "./Pad";
+import { PdfPage, usePdf } from "./PdfPage";
 import { boxStyle, Sheet } from "./Sheet";
 import {
   actionLabel,
@@ -309,6 +310,7 @@ export function Ready({
   const name = signer.name ?? "";
   const tasks = useMemo(() => tasksOf(fields), [fields]);
   const pages = useMemo(() => pagesWithFields(fields), [fields]);
+  const pdf = usePdf(() => call("/document").then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText)))), base);
   const [entry, setEntry] = useState<Entry>(emptyEntry);
   const [current, setCurrent] = useState<string | null>(() => nextTask(tasks, emptyEntry())?.key ?? null);
   const [dialog, setDialog] = useState<Dialogs>(null);
@@ -471,17 +473,23 @@ export function Ready({
           <div className="sg-intro">
             <p>
               {first ? `Hello ${first}. ` : ""}
-              <strong>{pages.length ? `Your boxes are on ${pagesText(pages)}.` : "There is nothing to fill in on the pages."}</strong> The sheets below show where they are; read the whole
-              document in the PDF first.
+              <strong>{pages.length ? `Your boxes are on ${pagesText(pages)}.` : "There is nothing to fill in on the pages."}</strong> Read the whole document, then fill them in.
             </p>
             <DocumentLink base={base} hasCode={hasCode} call={call} name={request.document_name} pages={request.pages.length} />
-            {!hasCode && <Preview src={`${base}/document`} />}
+            {!hasCode && !pdf && <Preview src={`${base}/document`} />}
           </div>
-          {pages.map((n) => {
+          {(pdf ? request.pages.map((p) => p.page) : pages).map((n) => {
             const size = request.pages.find((p) => p.page === n) ?? { page: n, width: 612, height: 792 };
             const here = fields.filter((f) => f.page === n);
             return (
-              <Sheet key={n} number={n} count={request.pages.length} size={size} note={`${here.length} ${here.length === 1 ? "box" : "boxes"} for you`}>
+              <Sheet
+                key={n}
+                number={n}
+                count={request.pages.length}
+                size={size}
+                picture={pdf && <PdfPage pdf={pdf} number={n} />}
+                note={here.length ? `${here.length} ${here.length === 1 ? "box" : "boxes"} for you` : undefined}
+              >
                 {here.map((f) => {
                   const task = tasks.find((t) => t.fields.some((x) => x.id === f.id));
                   return (

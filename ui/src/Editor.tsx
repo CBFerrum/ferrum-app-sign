@@ -9,6 +9,7 @@ import { Copy, Redo2, Trash, TriangleAlert, Undo2, ZoomIn, ZoomOut } from "lucid
 import { Alert, Button, Field } from "@ferrum/kit";
 import type { Rect, Size } from "./geometry";
 import { addBox, arrow, type Box, colourOf, commit, copyOf, describe, fit, grow, type Handle, HANDLES, history, kindOf, KINDS, lacksSignature, move, redo, resize, spread, toPoints, undo, whole } from "./placement";
+import { PdfPage, usePdf } from "./PdfPage";
 import { boxStyle, Sheet } from "./Sheet";
 import type { FieldType } from "./signing";
 
@@ -57,8 +58,9 @@ export interface Role {
   label: string;
 }
 
-export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; pages: Size[]; onPdf?: () => void }) {
+export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes; roles: Role[]; pages: Size[]; onPdf?: () => void; document?: string | null }) {
   const { boxes } = ed;
+  const pdf = usePdf(path ? () => fetch(path, { credentials: "same-origin" }).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText)))) : null, path ?? "");
   const names = roles.map((r) => r.role);
   const [selected, setSelected] = useState<string | null>(null);
   const [active, setActive] = useState(roles[0]?.role ?? "");
@@ -289,7 +291,7 @@ export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; 
 
       <div className="sg-edit-body">
         <div className={pages.length > 40 ? "sg-stage sg-lazy" : "sg-stage"}>
-          <p className="sg-note">The sheets are the size of your pages, not pictures of them. Keep the PDF open beside this screen to see where things go on each page.</p>
+          {!pdf && <p className="sg-note">The sheets are the size of your pages, not pictures of them. Keep the PDF open beside this screen to see where things go on each page.</p>}
           {pages.map((size, i) => {
             const n = i + 1;
             const here = boxes.filter((b) => b.page === n);
@@ -299,6 +301,7 @@ export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; 
                 number={n}
                 count={pages.length}
                 size={size}
+                picture={pdf && <PdfPage pdf={pdf} number={n} />}
                 note={here.length ? `${here.length} ${here.length === 1 ? "box" : "boxes"}` : undefined}
                 inner={(el) => {
                   if (el) sheets.current.set(n, el);
