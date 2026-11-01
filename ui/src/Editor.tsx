@@ -66,6 +66,8 @@ export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; 
   const [drag, setDrag] = useState<{ key: string; rect: Rect } | null>(null);
   const [ghost, setGhost] = useState<{ type: FieldType; x: number; y: number } | null>(null);
   const [clip, setClip] = useState<Box | null>(null);
+  // What was just done, for people who do not see the sheets.
+  const [said, say] = useState("");
   const root = useRef<HTMLDivElement>(null);
   const sheets = useRef(new Map<number, HTMLDivElement>());
   const role = names.some((r) => r === active) ? active : (names[0] ?? "");
@@ -101,20 +103,25 @@ export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; 
     ed.set((prev) => [...prev, b]);
     setSelected(b.key);
     focusBox(b.key);
+    say(`Added: ${describe(b)}. Arrow keys move it.`);
   };
   const remove = (key: string) => {
+    const gone = boxes.find((b) => b.key === key);
     ed.set((prev) => prev.filter((b) => b.key !== key));
     setSelected(null);
+    if (gone) say(`Deleted: ${describe(gone)}.`);
   };
   const everyPage = (b: Box) => {
     const copies = spread(b, pages, boxes);
     if (copies.length) ed.set((prev) => [...prev, ...copies]);
+    say(copies.length ? `Copied to ${copies.length} more ${copies.length === 1 ? "page" : "pages"}.` : "It is already on every page.");
   };
   const duplicate = (b: Box) => {
     const c = copyOf(b, pages[b.page - 1] ?? { width: 612, height: 792 });
     ed.set((prev) => [...prev, c]);
     setSelected(c.key);
     focusBox(c.key);
+    say(`Copied: ${describe(c)}.`);
   };
 
   /** Picks a box up (or one of its edges) and carries it with the pointer. */
@@ -184,13 +191,11 @@ export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; 
     if (el.closest("input, select, textarea, [contenteditable]")) return;
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
-    if (mod && k === "z") {
+    if (mod && (k === "z" || k === "y")) {
       e.preventDefault();
-      return e.shiftKey ? ed.redo() : ed.undo();
-    }
-    if (mod && k === "y") {
-      e.preventDefault();
-      return ed.redo();
+      const again = k === "y" || e.shiftKey;
+      say(again ? "Redone." : "Undone.");
+      return again ? ed.redo() : ed.undo();
     }
     if (mod && k === "v" && clip) {
       e.preventDefault();
@@ -209,6 +214,7 @@ export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; 
     }
     if (mod && k === "c") {
       e.preventDefault();
+      say("Copied. Paste it with Ctrl or ⌘ V.");
       return setClip(sel);
     }
     if (e.key === "Delete" || e.key === "Backspace") {
@@ -234,10 +240,10 @@ export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; 
   return (
     <div className="sg-editor" ref={root} onKeyDown={onKey} style={{ "--zoom": zoom } as CSSProperties}>
       <div className="sg-edit-bar" role="toolbar" aria-label="Page tools">
-        <Button size="sm" onClick={ed.undo} disabled={!ed.canUndo} aria-label="Undo">
+        <Button size="sm" onClick={() => (say("Undone."), ed.undo())} disabled={!ed.canUndo} aria-label="Undo">
           <Undo2 size={15} aria-hidden="true" /> Undo
         </Button>
-        <Button size="sm" onClick={ed.redo} disabled={!ed.canRedo} aria-label="Redo">
+        <Button size="sm" onClick={() => (say("Redone."), ed.redo())} disabled={!ed.canRedo} aria-label="Redo">
           <Redo2 size={15} aria-hidden="true" /> Redo
         </Button>
         <span className="sg-edit-sep" />
@@ -402,6 +408,9 @@ export function Editor({ ed, roles, pages, onPdf }: { ed: Boxes; roles: Role[]; 
             </section>
           )}
         </aside>
+      </div>
+      <div className="sr-only" role="status" aria-live="polite">
+        {said}
       </div>
       {ghost && (
         <div className={`sg-ghost sg-c${colourOf(role, names)}`} style={{ left: ghost.x, top: ghost.y }} aria-hidden="true">

@@ -236,6 +236,12 @@ describe("the lists", () => {
     expect(draw(client(), <Requests />, "/?tab=closed")).toContain("Nothing was declined");
   });
 
+  it("keeps the search in the address", () => {
+    expect(draw(client(), <Requests />, "/?tab=drafts&q=nda")).toContain(">NDA<");
+    expect(draw(client(), <Requests />, "/?tab=drafts&q=zzz")).toContain("Nothing matches");
+    expect(draw(client(), <Requests />, "/?q=sign-2026-00012")).toContain("Master Services Agreement");
+  });
+
   it("starts a first-time workspace off", () => {
     const empty = new QueryClient();
     empty.setQueryData(["sign", "requests"], { pages: [{ rows: [] }], pageParams: [""] });

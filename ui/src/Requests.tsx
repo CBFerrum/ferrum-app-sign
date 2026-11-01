@@ -43,7 +43,13 @@ export function Requests() {
   const navigate = useNavigate();
   const [sp, setSp] = useSearchParams();
   const tab: TabId = TABS.some((t) => t.id === sp.get("tab")) ? (sp.get("tab") as TabId) : "progress";
-  const [search, setSearch] = useState("");
+  // The list and what was searched for live in the address, so a link shows the same thing.
+  const search = sp.get("q") ?? "";
+  const show = (change: Record<string, string | null>) => {
+    const next = new URLSearchParams(sp);
+    for (const [k, v] of Object.entries(change)) v ? next.set(k, v) : next.delete(k);
+    setSp(next, { replace: true });
+  };
   const [links, setLinks] = useState<LinkRow[] | null>(null);
 
   const q = useInfiniteQuery({
@@ -106,7 +112,7 @@ export function Requests() {
   ) : !shown.length ? (
     <EmptyState title={search ? "Nothing matches" : tabInfo.empty} icon={search ? "search" : "check"}>
       {search ? (
-        <button type="button" className="link-btn" onClick={() => setSearch("")}>
+        <button type="button" className="link-btn" onClick={() => show({ q: null })}>
           Clear the search
         </button>
       ) : (
@@ -184,7 +190,7 @@ export function Requests() {
           </p>
         </div>
         <div className="sg-tools">
-          <input className="input sg-search" type="search" placeholder="Find a request…" aria-label="Find a request" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input className="input sg-search" type="search" placeholder="Find a request…" aria-label="Find a request" value={search} onChange={(e) => show({ q: e.target.value || null })} />
           <Link className="btn btn-primary btn-md" to="/new">
             <Plus size={15} aria-hidden="true" /> New request
           </Link>
@@ -192,7 +198,7 @@ export function Requests() {
       </header>
       <div className="sg-switch" role="tablist" aria-label="Requests by where they stand">
         {TABS.map((t) => (
-          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setSp(t.id === "progress" ? {} : { tab: t.id }, { replace: true })}>
+          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => show({ tab: t.id === "progress" ? null : t.id })}>
             {t.label}
             {q.data && <span className="sg-count-chip">{count(t.id)}</span>}
           </button>
