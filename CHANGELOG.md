@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
+- A page made for signers, at `/sign/s/{workspace}/{token}`, opened from their link with no account. It shows the pages that have something for them with their boxes in place, and one button walks them through what is left: sign (drawn or typed), add initials, fill in, tick, then read the agreement and finish. It works on a phone, with the next step at the thumb. It says plainly when a link is spent, withdrawn, expired or not yet their turn, asks for the access code when there is one, lets them decline with a reason, and says what kind of signature this is: an electronic signature with an audit trail, not a PAdES, advanced or qualified one.
+- Sending a request is a few steps: who signs and in what order, where each of them signs, and a last look that says in words what is still missing. Boxes are placed on the pages by dragging from a palette or with the keyboard (add, move, resize with the arrow keys, copy, delete), one colour per signer, with undo, zoom, and exact numbers for the selected box. Templates have the same screen for their boxes, and "Use" asks who signs this time.
+- Following a request: every request by where it stands (in progress, drafts, completed, closed) with who is holding it up; on its page each signer's progress and reminders, a reminder or the links again (with links to copy when the workspace sends no email), correcting a name or email, withdrawing it with a reason, the audit trail told in words, a check of integrity that says which file or entry no longer matches, and the signed copy to download.
+- Links already sent keep working: the old self-contained signing page hands over to the new page where the platform serves it, and does the job itself where it does not.
+- The pages are drawn as sheets of the pages' size, not as pictures of the document: the platform has no PDF renderer yet. The PDF opens in the browser's own viewer from every screen that shows the sheets.
 - Personal data: a person's request now exports their signing events and the requests they sent, and says why they are kept: they are the evidence of a signature.
 - Emails no longer need the Mail app: without it, invitations, reminders and withdrawals go
   through the server's mailer, and the completion email carries the signed PDF when the mailer

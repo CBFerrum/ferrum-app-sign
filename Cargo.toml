@@ -36,6 +36,8 @@ tokio = { version = "1.45", features = ["rt"] }
 [dev-dependencies]
 # Emails go through the Mail app when a workspace has it: tested with the real app.
 ferrum-app-comms = { git = "https://github.com/CBFerrum/ferrum-app-comms", branch = "main" }
+# The interface is checked as the platform takes it (a release of ui/dist).
+ferrum-apps = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
 tokio = { version = "1.45", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 
 [lints.clippy]

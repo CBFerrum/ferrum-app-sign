@@ -5,7 +5,7 @@
   <img alt="Ferrum Sign" src="docs/assets/banner-light.svg" width="100%">
 </picture>
 
-[![CI](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.1.0-a63056?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
+[![CI](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.2.0-a63056?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
 
 **A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, AI-first business platform.**
 
@@ -26,10 +26,10 @@ step.
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.1.0` |
+| 📦 Version | `0.2.0` |
 | 🧱 Platform | Ferrum `>=0.3, <0.4` |
 | 🔗 Requires | nothing else |
-| 🖥️ Interface | Ferrum's records screens (`/data/sign/`) |
+| 🖥️ Interface | its own at `/sign/` (requests, sending, templates) and a page for signers, with Ferrum's records screens for the rest |
 | 🗃️ Records | 7 entities in 1 package |
 | 👥 Roles | 2: Sign User, Sign Manager |
 | 📊 Reports | 3 |
