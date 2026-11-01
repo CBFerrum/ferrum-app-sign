@@ -5,7 +5,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router";
-import { Ban, Bell, Check, Clock, Copy, Download, Ellipsis, Eye, FileCheck, Info, Mail, PenLine, X } from "lucide-react";
+import { Ban, Bell, Check, Clock, Copy, Download, Ellipsis, Eye, Hash, Info, Mail, PenLine, X } from "lucide-react";
 import { api, ApiError, docPath, download, errorMessage, relativeTime, shell } from "@ferrum/client";
 import { Alert, Badge, Button, Dialog, ErrorState, Field, PageLoading, Spinner, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@ferrum/kit/primitives";
@@ -196,7 +196,7 @@ export function RequestView({ request: r }: { request: SignRequest }) {
               Checks that the stored files and the trail are as they were when sent and signed.
             </p>
             <Button loading={busy === "verify"} onClick={() => void check()}>
-              <FileCheck size={15} aria-hidden="true" /> {verify ? "Check again" : "Check integrity"}
+              <Hash size={15} aria-hidden="true" /> {verify ? "Check again" : "Check integrity"}
             </Button>
             {verify && <Integrity result={verify.result} at={verify.at} />}
           </section>
