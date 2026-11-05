@@ -267,6 +267,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.2.4** | A small PDF's size reads in bytes or KB, not "0.00 MB". |
 | **0.2.3** | Rebuilt with Ferrum-Frontend 00dea07: a workflow state's kept fields are read-only, its needed ones required. |
 | **0.2.2** | Rebuilt with Ferrum-Frontend daeadda: actions say what they did. |
 | **0.2.1** | Rebuilt with Ferrum-Frontend 80ff179: labels name their fields, and linked titles show their titles. |
