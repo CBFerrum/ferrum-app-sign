@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SignRequest } from "./model";
 import type { Box } from "./placement";
-import { addSigner, bodyOf, boxCounts, changed, draftOf, editSigner, looksLikeEmail, moveSigner, nextRole, peopleOf, refusal, removeSigner, sendProblems, templateBody, titleOf, turns } from "./send";
+import { addSigner, bodyOf, boxCounts, changed, draftOf, editSigner, looksLikeEmail, moveSigner, nextRole, peopleOf, refusal, removeSigner, sendProblems, sizeText, templateBody, titleOf, turns } from "./send";
 
 const request = (over: Partial<SignRequest> = {}): SignRequest => ({
   id: "r1",
@@ -187,5 +187,11 @@ describe("the file to be signed", () => {
     expect(refusal({ ...pdf, size: 26 * 1024 * 1024 })).toBe("That file is larger than 25 MB.");
     expect(refusal({ ...pdf, size: 25 * 1024 * 1024 })).toBeNull();
     expect(refusal({ ...pdf, size: 0 })).toBe("That file is empty.");
+  });
+
+  it("says a file's size so a small one is not 0.00 MB", () => {
+    expect([sizeText(1), sizeText(776), sizeText(1023)]).toEqual(["1 byte", "776 bytes", "1023 bytes"]);
+    expect([sizeText(1024), sizeText(48_300), sizeText(999 * 1024)]).toEqual(["1 KB", "47 KB", "999 KB"]);
+    expect([sizeText(1000 * 1024), sizeText(2.4 * 1024 * 1024), sizeText(25 * 1024 * 1024)]).toEqual(["1.0 MB", "2.4 MB", "25.0 MB"]);
   });
 });
