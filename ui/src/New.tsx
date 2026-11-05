@@ -6,7 +6,7 @@ import { Link, useNavigate } from "react-router";
 import { FileUp } from "lucide-react";
 import { api, errorMessage, uploadFile } from "@ferrum/client";
 import { Alert, Button, Field, useShellTitle } from "@ferrum/kit";
-import { MAX_MB, refusal, titleOf } from "./send";
+import { MAX_MB, refusal, sizeText, titleOf } from "./send";
 import { TemplateCards } from "./Templates";
 
 export function NewRequest() {
@@ -64,7 +64,7 @@ export function NewRequest() {
           {file ? (
             <span>
               <strong>{file.name}</strong>
-              <span className="faint"> · {(file.size / 1024 / 1024).toFixed(file.size > 1024 * 1024 ? 1 : 2)} MB · choose another</span>
+              <span className="faint"> · {sizeText(file.size)} · choose another</span>
             </span>
           ) : (
             <span>
