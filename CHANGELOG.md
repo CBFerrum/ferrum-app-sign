@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4
+
+A PDF chosen to be signed shows its size as people read it: "776 bytes" or "48 KB" for a small file, not "0.00 MB". Built with Ferrum-Frontend 01b8ff0.
+
 ## 0.2.3
 
 Rebuilt with Ferrum-Frontend 00dea07: in a workflow state that names what may change, the other fields show read-only, and the fields the state needs show required.

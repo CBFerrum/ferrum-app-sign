@@ -204,6 +204,13 @@ export const MAX_MB = 25;
 /** A request's title from its file's name: "Master_Agreement.pdf" → "Master Agreement". */
 export const titleOf = (fileName: string) => fileName.replace(/\.pdf$/i, "").replace(/_+/g, " ").replace(/\s+/g, " ").trim();
 
+/** A file's size as people read it: "776 bytes", "48 KB", "2.4 MB". */
+export function sizeText(bytes: number): string {
+  if (bytes < 1024) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
+  if (bytes < 1000 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 /** Why a file cannot be sent, before it goes anywhere. */
 export function refusal(f: { name: string; type: string; size: number }): string | null {
   if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") return "Only PDF files can be signed here.";
