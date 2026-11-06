@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6
+
+Rebuilt with Ferrum-Frontend bb60115: a record page reads an empty number or check as the server does, so an action whose condition needs one shows, and a workspace's settings open as their one record.
+
 ## 0.2.5
 
 The actions ask for what they read: Resend Links can go to one signer, and Void keeps a reason, but neither asked, so their pages could not send them. They now declare the signer (an email or role) and the reason.
