@@ -1,5 +1,5 @@
 package: sign
-version: 0.1.0
+version: 0.1.1
 label: Sign
 description: Electronic signatures - send PDFs for signing in order or in parallel, place fields per signer, sign by secure link, sealed PDFs with an audit certificate and a hash-chained audit trail.
 depends: [core]

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.5
+
+The actions ask for what they read: Resend Links can go to one signer, and Void keeps a reason, but neither asked, so their pages could not send them. They now declare the signer (an email or role) and the reason.
+
 ## 0.2.4
 
 A PDF chosen to be signed shows its size as people read it: "776 bytes" or "48 KB" for a small file, not "0.00 MB". Built with Ferrum-Frontend 01b8ff0.
