@@ -752,6 +752,12 @@ async fn scenario() {
     refused(t.k.run_action(&asha, "SignRequest", lease_id, "void", json!({})).await, "invalid");
 
     // ───────────── void ─────────────
+    // What the actions read, their pages ask for: one signer to resend to, and why it is voided.
+    let asks = |action: &str| -> Vec<String> {
+        let ent = asha.schema.entity("SignRequest").unwrap();
+        ent.def.actions.iter().find(|a| a.name == action).unwrap().params.iter().map(|p| p.name.clone()).collect()
+    };
+    assert_eq!((asks("resend"), asks("void")), (vec!["signer".to_string()], vec!["reason".to_string()]));
     let loan =
         t.k.insert(&asha, "SignRequest", obj(one("Loan", "Sequential", two.clone(), two_fields.clone(), t.upload(&asha, "loan.pdf", &pdf).await)))
             .await
