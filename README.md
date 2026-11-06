@@ -267,6 +267,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.2.7** | Times on the workspace's clock; rebuilt with Ferrum-Frontend 24c3951. |
 | **0.2.6** | Rebuilt with Ferrum-Frontend bb60115: empty numbers read as the server reads them; settings open as their record. |
 | **0.2.5** | Resend Links asks which signer, Void asks why. |
 | **0.2.4** | A small PDF's size reads in bytes or KB, not "0.00 MB". |
