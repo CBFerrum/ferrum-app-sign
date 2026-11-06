@@ -267,6 +267,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.2.8** | Rebuilt with Ferrum-Frontend a76295e: times on a person's own clock when they chose one. |
 | **0.2.7** | Times on the workspace's clock; rebuilt with Ferrum-Frontend 24c3951. |
 | **0.2.6** | Rebuilt with Ferrum-Frontend bb60115: empty numbers read as the server reads them; settings open as their record. |
 | **0.2.5** | Resend Links asks which signer, Void asks why. |
