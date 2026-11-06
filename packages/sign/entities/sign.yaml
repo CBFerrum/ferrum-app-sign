@@ -130,8 +130,19 @@
   actions:
     - {name: send, label: Send for Signature, permission: write, condition: "doc.status == 'Draft'"}
     - {name: remind, label: Send Reminder, permission: write, condition: "doc.status == 'Sent' || doc.status == 'In Progress'"}
-    - {name: resend, label: Resend Links, permission: write, condition: "doc.status == 'Sent' || doc.status == 'In Progress'"}
-    - {name: void, label: Void, permission: write, condition: "doc.status == 'Sent' || doc.status == 'In Progress'", confirm: "Signers will no longer be able to sign. Continue?"}
+    - name: resend
+      label: Resend Links
+      permission: write
+      condition: "doc.status == 'Sent' || doc.status == 'In Progress'"
+      params:
+        - {name: signer, type: data, label: Signer, description: "One signer's email or role; everyone whose turn it is when empty"}
+    - name: void
+      label: Void
+      permission: write
+      condition: "doc.status == 'Sent' || doc.status == 'In Progress'"
+      confirm: "Signers will no longer be able to sign. Continue?"
+      params:
+        - {name: reason, type: text, label: Reason, description: "Kept on the request and in its trail"}
     - {name: verify, label: Verify Integrity, permission: read, condition: "doc.status != 'Draft'"}
   form:
     - {label: Request, fields: [title, status, signing_mode, expires_on, message]}
