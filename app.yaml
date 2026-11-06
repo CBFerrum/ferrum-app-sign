@@ -1,6 +1,6 @@
 id: sign
 name: Sign
-version: 0.2.8
+version: 0.2.9
 publisher: cbferrum
 summary: "Electronic signatures: send PDFs for signing in order, place fields, sign by secure link, sealed PDFs with an audit trail and certificate"
 description: README.md
