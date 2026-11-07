@@ -1152,7 +1152,7 @@ a.btn {
 }
 
 .sg-segmented button + button {
-  border-left: 1px solid var(--border);
+  border-inline-start: 1px solid var(--border);
 }
 
 .sg-segmented button[aria-pressed="true"] {
@@ -1173,7 +1173,7 @@ a.btn {
   gap: 0.625rem;
   padding: 0.75rem;
   border: 1px solid var(--border);
-  border-left: 4px solid var(--sg, var(--border-strong));
+  border-inline-start: 4px solid var(--sg, var(--border-strong));
   border-radius: var(--radius);
   background: var(--surface);
 }
@@ -1226,7 +1226,7 @@ a.btn {
 }
 
 .sg-next {
-  padding-left: 1.1rem;
+  padding-inline-start: 1.1rem;
   list-style: disc;
 }
 
@@ -1675,7 +1675,7 @@ a.btn {
   position: absolute;
   top: 0.75rem;
   bottom: 0.75rem;
-  left: 0.8125rem;
+  inset-inline-start: 0.8125rem;
   width: 1px;
   background: var(--border);
   content: "";
