@@ -2,7 +2,6 @@
 // each event of its trail says, and what a check of its integrity found. Pure, so the words are
 // tested without a browser.
 
-import { plural } from "./time";
 import type { SignEvent, Signer, SignRequest, Status } from "./model";
 import { t as tr } from "@ferrum/client";
 
@@ -52,23 +51,23 @@ export function standing(r: Pick<SignRequest, "status" | "signing_mode" | "signe
       text = "Not sent yet";
       break;
     case "Completed":
-      text = total === 1 ? "Signed" : `Signed by all ${total}`;
+      text = total === 1 ? "Signed" : tr("Signed by all {total}", { total });
       break;
     case "Declined": {
       const d = signers.find((s) => s.status === "Declined");
-      text = d ? `${who(d)} declined` : "Declined";
+      text = d ? tr("{d} declined", { d: who(d) }) : "Declined";
       break;
     }
     case "Voided":
       text = "Withdrawn by the sender";
       break;
     case "Expired":
-      text = `Expired with ${signed} of ${total} signed`;
+      text = tr("Expired with {signed} of {total} signed", { signed, total });
       break;
     default:
       text = holding.length
-        ? `Waiting for ${who(holding[0])}${holding.length > 1 ? ` and ${plural(holding.length - 1, "other")}` : ""}`
-        : `${signed} of ${total} signed`;
+        ? (holding.length > 2 ? tr("Waiting for {who} and {n} others", { who: who(holding[0]), n: holding.length - 1 }) : holding.length === 2 ? tr("Waiting for {who} and 1 other", { who: who(holding[0]) }) : tr("Waiting for {who}", { who: who(holding[0]) }))
+        : tr("{signed} of {total} signed", { signed, total });
   }
   return { signed, total, holding, text };
 }
@@ -77,13 +76,13 @@ export function standing(r: Pick<SignRequest, "status" | "signing_mode" | "signe
 export function signerLine(s: Signer, when: (iso: string | null | undefined) => string): string {
   switch (s.status) {
     case "Signed":
-      return `Signed ${when(s.signed_at)}`;
+      return tr("Signed {value}", { value: when(s.signed_at) });
     case "Declined":
-      return `Declined ${when(s.declined_at)}`;
+      return tr("Declined {value}", { value: when(s.declined_at) });
     case "Viewed":
-      return `Opened ${when(s.viewed_at)}, not signed yet`;
+      return tr("Opened {value}, not signed yet", { value: when(s.viewed_at) });
     case "Sent":
-      return `Link sent ${when(s.sent_at)}, not opened yet`;
+      return tr("Link sent {value}, not opened yet", { value: when(s.sent_at) });
     default:
       return "Waiting for their turn";
   }
@@ -93,7 +92,7 @@ export function signerLine(s: Signer, when: (iso: string | null | undefined) => 
 export function reminders(s: Signer, ago: (iso: string) => string): string {
   const n = s.reminders_sent ?? 0;
   if (!n) return "";
-  return `Reminded ${n === 1 ? "once" : `${n} times`}${s.last_reminded_at ? `, last ${ago(s.last_reminded_at)}` : ""}`;
+  return (n === 1 ? tr("Reminded once") : tr("Reminded {n} times", { n })) + (s.last_reminded_at ? tr(", last {when}", { when: ago(s.last_reminded_at) }) : "");
 }
 
 export type StepState = "done" | "now" | "later" | "declined";
@@ -123,7 +122,7 @@ export function told(e: SignEvent): Told {
     case "Viewed":
       return { title: tr("{name} opened the document", { name }), detail: "", tone: "plain" };
     case "Signed":
-      return { title: tr("{name} signed", { name }), detail: detail ? `Signature ${detail.replace(/^signature /, "")}` : "", tone: "good" };
+      return { title: tr("{name} signed", { name }), detail: detail ? tr("Signature {detail}", { detail: detail.replace(/^signature /, "") }) : "", tone: "good" };
     case "Declined":
       return { title: tr("{name} declined", { name }), detail: detail ? `“${detail}”` : "", tone: "bad" };
     case "Reminded":
@@ -189,7 +188,7 @@ export function checks(v: Verify): Check[] {
   out.push({
     label: tr("The audit trail"),
     ok: v.audit_trail.ok,
-    detail: v.audit_trail.ok ? `${plural(v.audit_trail.events, "event")}, each tied to the one before it.` : (v.audit_trail.problem ?? "The trail doesn't add up."),
+    detail: v.audit_trail.ok ? tr("{value}, each tied to the one before it.", { value: String((v.audit_trail.events === 1 ? tr("1 event") : tr("{n} events", { n: v.audit_trail.events }))) }) : (v.audit_trail.problem ?? "The trail doesn't add up."),
   });
   return out;
 }

@@ -1,7 +1,7 @@
 // Time as the screens say it. Pure, so the words are tested without a clock. The team's screens
 // are on the workspace's clock; the signer's page on the signer's own.
 
-import { formatMoment } from "@ferrum/client";
+import { formatMoment, t as tr } from "@ferrum/client";
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -19,9 +19,9 @@ export function timeLeft(deadline: string | null | undefined, now = Date.now()):
   if (minutes <= 0) return { text: "Expired", level: "late" };
   if (minutes < 60) return { text: "Under an hour left", level: "soon" };
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return { text: `${plural(hours, "hour")} left`, level: "soon" };
+  if (hours < 24) return { text: tr("{value} left", { value: String((hours === 1 ? tr("1 hour") : tr("{n} hours", { n: hours }))) }), level: "soon" };
   const days = Math.floor(hours / 24);
-  return { text: `${plural(days, "day")} left`, level: days < 3 ? "soon" : "ok" };
+  return { text: tr("{value} left", { value: String((days === 1 ? tr("1 day") : tr("{n} days", { n: days }))) }), level: days < 3 ? "soon" : "ok" };
 }
 
 /** "3 Nov, 2:15 pm": a moment on the workspace's clock. */
