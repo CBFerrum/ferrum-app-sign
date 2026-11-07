@@ -7,7 +7,7 @@
 
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Ban, Check, CircleAlert, Clock, Copy, Download, Ellipsis, FileText, Info, Link2Off, PenLine, Signature } from "lucide-react";
-import { bootstrap, saveBlob, t as tr } from "@ferrum/client";
+import { bootstrap, saveBlob, t as tr, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, Dialog, Field, Menu, MenuItem, Spinner, toast, useShellTitle } from "@ferrum/kit";
 import { copyText } from "./clipboard";
 import { MarkPad, MarkView } from "./Pad";
@@ -65,7 +65,7 @@ export function SigningPage() {
   const code = useRef("");
   const [phase, setPhase] = useState<Phase>(link ? { kind: "loading" } : { kind: "invalid" });
   const base = link ? `/api/site/${enc(link.tenant)}/sign/signing/${enc(link.token)}` : "";
-  useShellTitle(phase.kind === "ready" ? phase.view.request.title : "Sign a document");
+  useShellTitle(phase.kind === "ready" ? phase.view.request.title : tr("Sign a document"));
 
   // No session goes along: the link is the signer's whole credential.
   const call = useCallback(
@@ -174,15 +174,15 @@ export function SigningPage() {
           >
             <dl className="sg-facts sg-receipt">
               <dt>{tr("Document")}</dt>
-              <dd>{phase.title}</dd>
+              <dd>{isolate(phase.title)}</dd>
               {phase.number && (
                 <>
                   <dt>{tr("Reference")}</dt>
-                  <dd>{phase.number}</dd>
+                  <dd>{isolate(phase.number)}</dd>
                 </>
               )}
               <dt>{tr("Signed")}</dt>
-              <dd>{phase.at.toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" })}</dd>
+              <dd>{isolate(phase.at.toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" }))}</dd>
             </dl>
             <p className="muted" style={{ maxWidth: "34rem" }}>
               {tr("Once everyone has signed, the sealed copy goes to the sender, and to you by email if the sender's workspace sends email. This link has now been used and can't be used again. You can close this page.")}
@@ -221,7 +221,7 @@ function Frame({ children }: { children: ReactNode }) {
       <header className="sg-top sg-top-plain">
         <span className="sg-brand">
           <Signature size={18} aria-hidden="true" />
-          {workspace ? `${workspace} · Sign` : "Sign"}
+          {workspace ? tr("{workspace} · Sign", { workspace }) : tr("Sign")}
         </span>
       </header>
       <main className="sg-center" id="main">
@@ -241,9 +241,9 @@ function Notice({ icon, title, text, tone, children }: { icon: ReactNode; title:
         {icon}
       </span>
       <h1 ref={heading} tabIndex={-1}>
-        {title}
+        {isolate(title)}
       </h1>
-      {text && <p className="muted">{text}</p>}
+      {text && <p className="muted">{isolate(text)}</p>}
       {children}
     </div>
   );
@@ -426,18 +426,18 @@ export function Ready({
     <div className="sg-sign">
       <header className="sg-top">
         <div className="sg-top-main">
-          <h1 className="sg-title">{request.title}</h1>
+          <h1 className="sg-title">{isolate(request.title)}</h1>
           <p className="sg-from">
-            {sender ? `From ${sender}` : "Sent to you for signature"}
+            {sender ? tr("From {sender}", { sender }) : tr("Sent to you for signature")}
             {request.number ? ` · ${request.number}` : ""}
           </p>
         </div>
         <div className="sg-top-side">
           <div className="sg-count" aria-live="polite">
             <strong>
-              {done.done} of {done.total}
-            </strong>{" "}
-            done
+              {tr("{done} of {total}", { done: done.done, total: done.total })}
+            </strong>{isolate(" ")}
+            {tr("done")}
           </div>
           <div className="sg-meter" role="progressbar" aria-label={tr("Steps done")} aria-valuemin={0} aria-valuemax={done.total} aria-valuenow={done.done}>
             <span style={{ width: `${done.total ? (done.done / done.total) * 100 : 0}%` }} />
@@ -472,8 +472,8 @@ export function Ready({
         <div className="sg-pages">
           <div className="sg-intro">
             <p>
-              {first ? `Hello ${first}. ` : ""}
-              <strong>{pages.length ? `Your boxes are on ${pagesText(pages)}.` : "There is nothing to fill in on the pages."}</strong> {tr("Read the whole document, then fill them in.")}
+              {first ? tr("Hello {first}. ", { first }) : ""}
+              <strong>{pages.length ? tr("Your boxes are on {pages}.", { pages: pagesText(pages) }) : tr("There is nothing to fill in on the pages.")}</strong> {tr("Read the whole document, then fill them in.")}
             </p>
             <DocumentLink base={base} hasCode={hasCode} call={call} name={request.document_name} pages={request.pages.length} />
             {!hasCode && !pdf && <Preview src={`${base}/document`} />}
@@ -507,8 +507,8 @@ export function Ready({
         <aside className="sg-aside" aria-label={tr("Your steps")}>
           {request.message && (
             <blockquote className="sg-message">
-              <p>{request.message}</p>
-              {request.sender.name && <footer>{request.sender.name}</footer>}
+              <p>{isolate(request.message)}</p>
+              {request.sender.name && <footer>{isolate(request.sender.name)}</footer>}
             </blockquote>
           )}
           <dl className="sg-facts">
@@ -516,21 +516,21 @@ export function Ready({
               <>
                 <dt>{tr("Sign before")}</dt>
                 <dd>
-                  {deadline(request.expires_at)} {left && <Badge tone={left.level === "ok" ? "neutral" : left.level === "soon" ? "amber" : "red"}>{left.text}</Badge>}
+                  {isolate(deadline(request.expires_at))} {left && <Badge tone={left.level === "ok" ? "neutral" : left.level === "soon" ? "amber" : "red"}>{isolate(left.text)}</Badge>}
                 </dd>
               </>
             )}
             <dt>{tr("You sign as")}</dt>
             <dd>
               {name || "—"}
-              {signer.role ? <span className="faint"> · {signer.role}</span> : null}
+              {signer.role ? <span className="faint"> · {isolate(signer.role)}</span> : null}
             </dd>
             {request.document_sha256 && (
               <>
                 <dt title={tr("A fingerprint of the file you are asked to sign. It is kept with the signature, so the file can be checked later.")}>{tr("Fingerprint")}</dt>
                 <dd className="sg-fp">
                   <span className="mono" title={request.document_sha256}>
-                    {short(request.document_sha256)}
+                    {isolate(short(request.document_sha256))}
                   </span>
                   <button
                     type="button"
@@ -561,11 +561,11 @@ export function Ready({
                       {ok ? <Check size={13} /> : <PenLine size={13} />}
                     </span>
                     <span className="sg-step-text">
-                      <strong>{t.label}</strong>
+                      <strong>{isolate(t.label)}</strong>
                       <small>
-                        {pagesText([...new Set(t.fields.map((f) => f.page))])}
-                        {t.required ? "" : " · optional"}
-                        {ok ? " · done" : ""}
+                        {isolate(pagesText([...new Set(t.fields.map((f) => f.page))]))}
+                        {t.required ? "" : tr(" · optional")}
+                        {ok ? tr(" · done") : ""}
                       </small>
                     </span>
                   </button>
@@ -575,7 +575,7 @@ export function Ready({
           </ol>
           <div className="sg-primary">
             <Button variant="primary" onClick={primary}>
-              {label}
+              {isolate(label)}
             </Button>
             {!everything && target === null && <p className="faint">{tr("Nothing required is left.")}</p>}
           </div>
@@ -583,7 +583,7 @@ export function Ready({
             {tr("This link is yours alone: signing with it is recorded as you. Please don't forward it.")}
           </p>
           <p className="sg-kind">
-            <Info size={14} aria-hidden="true" /> <span>{tr("An electronic signature with an audit trail, not a certificate-based one.")}</span>{" "}
+            <Info size={14} aria-hidden="true" /> <span>{tr("An electronic signature with an audit trail, not a certificate-based one.")}</span>{isolate(" ")}
             <button type="button" className="link-btn" onClick={() => setDialog({ kind: "about", back: null })}>
               {tr("What this means")}
             </button>
@@ -594,19 +594,19 @@ export function Ready({
       <div className="sg-bar">
         <div className="sg-bar-text">
           <strong>
-            {done.done} of {done.total} done
+            {tr("{done} of {total} done", { done: done.done, total: done.total })}
           </strong>
-          <span>{everything ? "Ready to sign" : "Next step"}</span>
+          <span>{everything ? tr("Ready to sign") : tr("Next step")}</span>
         </div>
         <Button variant="primary" onClick={primary}>
-          {label}
+          {isolate(label)}
         </Button>
       </div>
 
       <Dialog
         open={markTask !== null}
         onClose={() => setDialog(null)}
-        title={markTask === "initials" ? "Your initials" : "Your signature"}
+        title={markTask === "initials" ? tr("Your initials") : tr("Your signature")}
         footer={
           <>
             <Button onClick={() => setDialog(null)}>{tr("Cancel")}</Button>
@@ -618,7 +618,7 @@ export function Ready({
                 if (mark && markTask) commit((e) => ({ ...e, [markTask]: mark }), markTask);
               }}
             >
-              {tr("Use")} {markTask === "initials" ? "these initials" : "this signature"}
+              {tr("Use")} {markTask === "initials" ? tr("these initials") : tr("this signature")}
             </Button>
           </>
         }
@@ -627,8 +627,8 @@ export function Ready({
           <>
             <p className="muted" style={{ marginBottom: 12 }}>
               {markTask === "signature"
-                ? `It goes on every signature box on the document (${tasks.find((t) => t.key === "signature")?.fields.length ?? 1}).`
-                : `It goes on every initials box on the document (${tasks.find((t) => t.key === "initials")?.fields.length ?? 1}).`}
+                ? tr("It goes on every signature box on the document ({value}).", { value: tasks.find((t) => t.key === "signature")?.fields.length ?? 1 })
+                : tr("It goes on every initials box on the document ({value}).", { value: tasks.find((t) => t.key === "initials")?.fields.length ?? 1 })}
             </p>
             <MarkPad kind={markTask} typed={markTask === "initials" ? initialsOf(name) : name} onChange={setPending} />
           </>
@@ -655,7 +655,7 @@ export function Ready({
             if (textTask) commit((en) => ({ ...en, values: { ...en.values, [textTask.key]: text.trim() } }), textTask.key);
           }}
         >
-          <Field label={textTask?.label ?? ""} htmlFor="sg-text" required={textTask?.required} error={textTask ? problems[textTask.key] : undefined} hint={textTask?.required ? undefined : "Optional"}>
+          <Field label={textTask?.label ?? ""} htmlFor="sg-text" required={textTask?.required} error={textTask ? problems[textTask.key] : undefined} hint={textTask?.required ? undefined : tr("Optional")}>
             <input id="sg-text" className="input" maxLength={500} autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
           </Field>
         </form>
@@ -678,7 +678,7 @@ export function Ready({
       >
         <div className="stack" style={{ gap: 14 }}>
           <p>
-            {tr("You are signing")} <strong>{request.title}</strong> as <strong>{name || "the signer"}</strong>
+            {tr("You are signing")} <strong>{isolate(request.title)}</strong> {tr("as")} <strong>{name || tr("the signer")}</strong>
             {signer.role ? ` (${signer.role})` : ""}.
           </p>
           {(entry.signature || entry.initials) && (
@@ -711,7 +711,7 @@ export function Ready({
                     const t = tasks.find((x) => x.key === k);
                     return (
                       <li key={k}>
-                        {m}{" "}
+                        {isolate(m)}{isolate(" ")}
                         {t && (
                           <button type="button" className="link-btn" onClick={() => activate(t)}>
                             {tr("Fix it")}
@@ -723,16 +723,16 @@ export function Ready({
               </ul>
             </Alert>
           )}
-          {error && <Alert tone="error">{error}</Alert>}
+          {error && <Alert tone="error">{isolate(error)}</Alert>}
           <label className="sg-consent">
             <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
-            <span>{view.consent}</span>
+            <span>{isolate(view.consent)}</span>
           </label>
-          {problems.consent && <p className="field-error">{problems.consent}</p>}
+          {problems.consent && <p className="field-error">{isolate(problems.consent)}</p>}
           <p className="sg-kind">
-            <Info size={14} aria-hidden="true" />{" "}
+            <Info size={14} aria-hidden="true" />{isolate(" ")}
             <span>
-              {tr("This is an electronic signature with an audit trail. It is not a PAdES, advanced or qualified electronic signature.")}{" "}
+              {tr("This is an electronic signature with an audit trail. It is not a PAdES, advanced or qualified electronic signature.")}{isolate(" ")}
               <button type="button" className="link-btn" onClick={() => setDialog({ kind: "about", back: { kind: "review" } })}>
                 {tr("What this means")}
               </button>
@@ -781,13 +781,13 @@ function Box({
       ) : (
         <>
           <PenLine size="1.1em" aria-hidden="true" />
-          <span>{LABEL[f.field_type]}</span>
+          <span>{isolate(LABEL[f.field_type])}</span>
         </>
       );
       break;
     }
     case "Name":
-      content = <span>{name || "Name"}</span>;
+      content = <span>{name || tr("Name")}</span>;
       break;
     case "Date Signed":
       content = <span>{tr("Date signed")}</span>;
@@ -802,7 +802,7 @@ function Box({
   const status = state === "auto" ? "filled in for you" : state === "done" ? "done" : f.required ? "required" : "optional";
   if (state === "auto" || !task) {
     return (
-      <div id={`box-${f.id}`} className="sg-box" data-state="auto" data-kind={f.field_type} style={style} title={`${word}: filled in for you when you sign`}>
+      <div id={`box-${f.id}`} className="sg-box" data-state="auto" data-kind={f.field_type} style={style} title={tr("{word}: filled in for you when you sign", { word })}>
         {content}
       </div>
     );
@@ -817,7 +817,7 @@ function Box({
       data-problem={problem ? "" : undefined}
       style={style}
       title={problem ?? word}
-      aria-label={`${word}, page ${f.page}, ${status}${problem ? `. ${problem}` : ""}`}
+      aria-label={tr("{word}, page {page}, {status}{value}", { word, page: f.page, status, value: problem ? `. ${problem}` : "" })}
       onClick={() => onActivate(task)}
     >
       {content}
@@ -846,11 +846,11 @@ function Preview({ src }: { src: string }) {
 function DocumentLink({ base, hasCode, call, name, pages }: { base: string; hasCode: boolean; call: Call; name?: string | null; pages: number }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const label = `${hasCode ? "Download" : "Open"} the PDF${pages ? ` (${pages} ${pages === 1 ? "page" : "pages"})` : ""}`;
+  const label = tr("{value} the PDF{value2}", { value: hasCode ? "Download" : "Open", value2: pages ? ` (${pages} ${pages === 1 ? "page" : "pages"})` : "" });
   if (!hasCode)
     return (
       <a className="btn btn-md" href={`${base}/document`} target="_blank" rel="noopener noreferrer">
-        <FileText size={15} aria-hidden="true" /> {label}
+        <FileText size={15} aria-hidden="true" /> {isolate(label)}
       </a>
     );
   const get = async () => {
@@ -869,12 +869,12 @@ function DocumentLink({ base, hasCode, call, name, pages }: { base: string; hasC
   return (
     <span>
       <Button loading={busy} onClick={() => void get()}>
-        <Download size={15} aria-hidden="true" /> {label}
+        <Download size={15} aria-hidden="true" /> {isolate(label)}
       </Button>
       {error && (
         <span className="field-error" role="alert">
-          {" "}
-          {error}
+          {isolate(" ")}
+          {isolate(error)}
         </span>
       )}
     </span>
@@ -932,7 +932,7 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
           {tr("This is an")} <strong>{tr("electronic signature with an audit trail")}</strong>{tr(". When you sign, Sign records that you agreed, when, and from which browser, and seals the finished PDF with an extra page that lists those steps. If the file is changed afterwards, a check of it shows.")}
         </p>
         <p>
-          {tr("It is")} <strong>not</strong> {tr("a PAdES signature, and not an advanced or qualified electronic signature. The PDF carries no certificate that a PDF reader can validate, and you are identified by your personal link (and your access code, if you were given one), not by an identity check.")}
+          {tr("It is")} <strong>{tr("not")}</strong> {tr("a PAdES signature, and not an advanced or qualified electronic signature. The PDF carries no certificate that a PDF reader can validate, and you are identified by your personal link (and your access code, if you were given one), not by an identity check.")}
         </p>
         <p>
           {tr("Many agreements can be signed this way; whether it is enough for yours is for you and the sender to decide. If a law or the other side needs a qualified signature, don't sign here.")}

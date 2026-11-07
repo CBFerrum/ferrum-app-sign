@@ -6,7 +6,7 @@ import { Check, Copy } from "lucide-react";
 import { Badge, Button, Dialog, toast } from "@ferrum/kit";
 import { copyText } from "./clipboard";
 import { absolute, type LinkRow } from "./model";
-import { t } from "@ferrum/client";
+import { t, isolate } from "@ferrum/client";
 
 function Row({ link }: { link: LinkRow }) {
   const [done, setDone] = useState(false);
@@ -15,13 +15,13 @@ function Row({ link }: { link: LinkRow }) {
     <li className="sg-link">
       <div className="sg-link-who">
         <strong>{link.name || link.role}</strong>
-        <span className="faint">{link.email}</span>
+        <span className="faint">{isolate(link.email)}</span>
       </div>
       {link.emailed ? (
         <Badge tone="green">{t("Emailed")}</Badge>
       ) : (
         <div className="sg-link-url">
-          <input className="input mono" readOnly value={url} aria-label={`Signing link for ${link.name || link.role}`} onFocus={(e) => e.currentTarget.select()} />
+          <input className="input mono" readOnly value={url} aria-label={t("Signing link for {value}", { value: link.name || link.role })} onFocus={(e) => e.currentTarget.select()} />
           <Button
             onClick={async () => {
               if (await copyText(url)) {
@@ -32,7 +32,7 @@ function Row({ link }: { link: LinkRow }) {
             }}
           >
             {done ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
-            {done ? "Copied" : "Copy"}
+            {done ? t("Copied") : t("Copy")}
           </Button>
         </div>
       )}
@@ -48,8 +48,8 @@ export function LinksDialog({ open, title, links, onClose }: { open: boolean; ti
       <div className="stack" style={{ gap: 12 }}>
         <p className="muted">
           {manual
-            ? "This workspace has no email set up for Sign, so nothing was emailed. Send each person their own link: it works for them only, once."
-            : "Each person was emailed their link. It works for them only, once."}
+            ? t("This workspace has no email set up for Sign, so nothing was emailed. Send each person their own link: it works for them only, once.")
+            : t("Each person was emailed their link. It works for them only, once.")}
         </p>
         <ul className="sg-links">
           {links.map((l) => (

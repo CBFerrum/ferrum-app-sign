@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { Button, Tabs } from "@ferrum/kit";
 import { exportFrame, hasInk, inkBounds, type Pt } from "./ink";
 import type { Mark } from "./signing";
-import { t as tr } from "@ferrum/client";
+import { t as tr, isolate } from "@ferrum/client";
 
 /** The pen's width in CSS pixels, the margin kept round the ink and the widest picture sent. */
 const PEN = 2.6;
@@ -136,7 +136,7 @@ function Drawing({ height, hint, onChange }: { height: string; hint: string; onC
           onPointerUp={up}
           onPointerCancel={up}
         />
-        {drawn === 0 && <span className="sg-canvas-hint">{hint}</span>}
+        {drawn === 0 && <span className="sg-canvas-hint">{isolate(hint)}</span>}
       </div>
       <div className="row">
         <Button size="sm" onClick={undo} disabled={drawn === 0}>
@@ -173,20 +173,20 @@ export function MarkPad({ kind, typed: start, onChange }: { kind: "signature" | 
       <Tabs
         id="mark"
         tabs={[
-          { id: "draw", label: "Draw" },
-          { id: "type", label: "Type" },
+          { id: "draw", label: tr("Draw") },
+          { id: "type", label: tr("Type") },
         ]}
         value={mode}
         onChange={(m) => setMode(m as "draw" | "type")}
       />
       {/* Both stay mounted: what was drawn is still there after a look at the other tab. */}
       <div role="tabpanel" id="mark-panel-draw" aria-labelledby="mark-tab-draw" hidden={mode !== "draw"}>
-        <Drawing height={kind === "signature" ? "11rem" : "7.5rem"} hint={`Draw your ${what} here`} onChange={setPng} />
+        <Drawing height={kind === "signature" ? "11rem" : "7.5rem"} hint={tr("Draw your {what} here", { what })} onChange={setPng} />
       </div>
       <div role="tabpanel" id="mark-panel-type" aria-labelledby="mark-tab-type" hidden={mode !== "type"}>
         <div className="stack" style={{ gap: 8 }}>
           <label className="field-label" htmlFor="mark-text">
-            {tr("Type your")} {kind === "signature" ? "full name" : "initials"}
+            {tr("Type your")} {kind === "signature" ? tr("full name") : tr("initials")}
           </label>
           <input id="mark-text" className="input" value={text} maxLength={kind === "signature" ? 100 : 10} autoComplete="off" onChange={(e) => setText(e.target.value)} />
           <div className="sg-paper sg-typed" aria-hidden="true">
@@ -203,5 +203,5 @@ export function MarkPad({ kind, typed: start, onChange }: { kind: "signature" | 
 
 /** A mark as it shows on a box or in a summary. */
 export function MarkView({ mark, className }: { mark: Mark; className?: string }) {
-  return "image" in mark ? <img className={`sg-mark ${className ?? ""}`} src={mark.image} alt="" /> : <span className={`sg-mark sg-mark-text ${className ?? ""}`}>{mark.text}</span>;
+  return "image" in mark ? <img className={`sg-mark ${className ?? ""}`} src={mark.image} alt="" /> : <span className={`sg-mark sg-mark-text ${className ?? ""}`}>{isolate(mark.text)}</span>;
 }

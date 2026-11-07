@@ -12,7 +12,7 @@ import { addBox, arrow, type Box, colourOf, commit, copyOf, describe, fit, grow,
 import { PdfPage, usePdf } from "./PdfPage";
 import { boxStyle, Sheet } from "./Sheet";
 import type { FieldType } from "./signing";
-import { t } from "@ferrum/client";
+import { t, isolate } from "@ferrum/client";
 
 // ───────────────────────── the boxes, with undo ─────────────────────────
 
@@ -272,7 +272,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
             }}
           >
             <option value="" disabled>
-              {pages.length} {pages.length === 1 ? "page" : "pages"}
+              {pages.length} {pages.length === 1 ? t("page") : t("pages")}
             </option>
             {pages.map((_, i) => (
               <option key={i} value={i + 1}>
@@ -329,7 +329,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
                       onFocus={() => setSelected(b.key)}
                     >
                       <span className="sg-edit-label">{b.label.trim() || kindOf(b.field_type).label}</span>
-                      {!b.required && b.field_type !== "Date Signed" && b.field_type !== "Name" && <span className="sg-edit-opt">optional</span>}
+                      {!b.required && b.field_type !== "Date Signed" && b.field_type !== "Name" && <span className="sg-edit-opt">{t("optional")}</span>}
                       {picked && HANDLES.map((h) => <span key={h} className="sg-handle" data-h={h} aria-hidden="true" onPointerDown={(e) => begin(e, b, h)} />)}
                     </div>
                   );
@@ -351,8 +351,8 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
                     <button type="button" className={`sg-who-pick sg-c${colourOf(r.role, names)}`} aria-pressed={r.role === role} onClick={() => setActive(r.role)}>
                       <span className="sg-dot" aria-hidden="true" />
                       <span className="sg-who-name">
-                        <strong>{r.label}</strong>
-                        {r.label !== r.role && <small>{r.role}</small>}
+                        <strong>{isolate(r.label)}</strong>
+                        {r.label !== r.role && <small>{isolate(r.role)}</small>}
                       </span>
                       <span className="faint">{count}</span>
                       {lacks && (
@@ -382,7 +382,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
                   onClick={(e) => e.detail === 0 && add(k.type)}
                 >
                   <span className="sg-dot" aria-hidden="true" />
-                  {k.label}
+                  {isolate(k.label)}
                 </button>
               ))}
             </div>
@@ -414,11 +414,11 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
         </aside>
       </div>
       <div className="sr-only" role="status" aria-live="polite">
-        {said}
+        {isolate(said)}
       </div>
       {ghost && (
         <div className={`sg-ghost sg-c${colourOf(role, names)}`} style={{ left: ghost.x, top: ghost.y }} aria-hidden="true">
-          {kindOf(ghost.type).label}
+          {isolate(kindOf(ghost.type).label)}
         </div>
       )}
     </div>
@@ -466,7 +466,7 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
           <select id="ins-role" className="select" value={b.role} onChange={(e) => onChange({ role: e.target.value })}>
             {roles.map((r) => (
               <option key={r.role} value={r.role}>
-                {r.label}
+                {isolate(r.label)}
               </option>
             ))}
           </select>
@@ -475,7 +475,7 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
           <select id="ins-kind" className="select" value={b.field_type} onChange={(e) => onChange({ field_type: e.target.value as FieldType })}>
             {KINDS.map((k) => (
               <option key={k.type} value={k.type}>
-                {k.label}
+                {isolate(k.label)}
               </option>
             ))}
           </select>
@@ -507,10 +507,10 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
             />
           </Field>
           <span />
-          {num("x", "From left", size.width)}
-          {num("y", "From top", size.height)}
-          {num("width", "Width", size.width)}
-          {num("height", "Height", size.height)}
+          {num("x", t("From left"), size.width)}
+          {num("y", t("From top"), size.height)}
+          {num("width", t("Width"), size.width)}
+          {num("height", t("Height"), size.height)}
         </div>
         <p className="faint" style={{ fontSize: 12 }}>
           {t("In points (72 to the inch) from the top left of page {page}.", { page: b.page })}

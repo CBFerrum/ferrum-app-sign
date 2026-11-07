@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { FileText, Plus } from "lucide-react";
-import { api, docPath, errorMessage, type FieldError, t as tr } from "@ferrum/client";
+import { api, docPath, errorMessage, type FieldError, t as tr, isolate } from "@ferrum/client";
 import { Alert, Button, Dialog, EmptyState, ErrorState, Field, Spinner, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta } from "@ferrum/records";
 import { templateQuery, templatesQuery } from "./data";
@@ -20,7 +20,7 @@ export function UseTemplate({ id, onClose }: { id: string; onClose: () => void }
   const q = useQuery(templateQuery(id));
   const t = q.data;
   return (
-    <Dialog open onClose={onClose} title={t ? `Use “${t.template_name}”` : "Use a template"} wide>
+    <Dialog open onClose={onClose} title={t ? tr("Use “{template_name}”", { template_name: t.template_name }) : tr("Use a template")} wide>
       {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : !t ? <Spinner label={tr("Opening the template")} /> : <Form key={t.id} template={t} onClose={onClose} onMade={(rid) => navigate(`/request/${rid}/prepare/review`)} />}
     </Dialog>
   );
@@ -58,10 +58,10 @@ function Form({ template: t, onClose, onMade }: { template: Template; onClose: (
       <p className="muted">
         {tr("Say who signs this time. The document and where each person signs come from the template; you can still change them before sending.")}
       </p>
-      {error && <Alert tone="error">{error}</Alert>}
+      {error && <Alert tone="error">{isolate(error)}</Alert>}
       {who.map((p, i) => (
         <fieldset key={p.role} className="sg-person">
-          <legend>{p.role}</legend>
+          <legend>{isolate(p.role)}</legend>
           <div className="form-grid">
             <Field label={tr("Name")} htmlFor={`u-name-${i}`} required error={problem(i, "name")}>
               <input id={`u-name-${i}`} className="input" value={p.name} onChange={(e) => set(i, { name: e.target.value })} autoComplete="off" />
@@ -127,9 +127,9 @@ export function TemplateCards({ limit }: { limit?: number }) {
               <FileText size={18} />
             </span>
             <div className="sg-card-body">
-              <strong>{t.template_name}</strong>
+              <strong>{isolate(t.template_name)}</strong>
               <span className="faint">
-                {[t.page_count ? `${t.page_count} ${t.page_count === 1 ? "page" : "pages"}` : null, t.signing_mode === "Parallel" ? "All sign at once" : "Signed in order", t.document_name].filter(Boolean).join(" · ")}
+                {isolate([t.page_count ? `${t.page_count} ${t.page_count === 1 ? "page" : "pages"}` : null, t.signing_mode === "Parallel" ? "All sign at once" : "Signed in order", t.document_name].filter(Boolean).join(" · "))}
               </span>
             </div>
             <div className="sg-card-actions">
@@ -156,7 +156,7 @@ export function TemplateCards({ limit }: { limit?: number }) {
 }
 
 export function Templates() {
-  useShellTitle("Templates");
+  useShellTitle(tr("Templates"));
   const meta = useEntityMeta("SignTemplate");
   const writable = can(meta.data?.permissions, "write");
   return (

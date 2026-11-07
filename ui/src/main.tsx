@@ -3,7 +3,10 @@
 // one, and the records behind them in the records frame. Which of the two loads is decided here, so
 // a signer on a phone downloads only the page they need and none of the app.
 
-import { isPublicPage } from "@ferrum/client";
+import { addCatalogs, isPublicPage } from "@ferrum/client";
 import "./styles.css";
+
+// Its own words in the page's language (src/locales), fetched as the page starts; it is drawn once they are in.
+void addCatalogs({ ar: () => import("./locales/ar.json"), hi: () => import("./locales/hi.json") });
 
 void (isPublicPage() ? import("./public") : import("./app"));

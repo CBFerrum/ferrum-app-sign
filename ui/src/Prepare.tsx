@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { ArrowDown, ArrowUp, Check, Info, Plus, Send, Trash } from "lucide-react";
-import { api, ApiError, docPath, download, errorMessage, type FieldError, todayIso, t } from "@ferrum/client";
+import { api, ApiError, docPath, download, errorMessage, type FieldError, todayIso, t, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, confirmDialog, ErrorState, Field, PageLoading, toast, useLiveEntity, useShellTitle, useUnsavedGuard } from "@ferrum/kit";
 import { refresh, requestQuery, sendRequest } from "./data";
 import { Editor, useBoxes } from "./Editor";
@@ -18,15 +18,15 @@ import { short } from "./track";
 
 type StepId = "signers" | "fields" | "review";
 const STEPS: { id: StepId; label: string }[] = [
-  { id: "signers", label: "Signers" },
-  { id: "fields", label: "Where to sign" },
-  { id: "review", label: "Review" },
+  { id: "signers", get label() { return t("Signers"); } },
+  { id: "fields", get label() { return t("Where to sign"); } },
+  { id: "review", get label() { return t("Review"); } },
 ];
 
 export function PrepareRoute() {
   const { id = "", step = "signers" } = useParams();
   const q = useQuery(requestQuery(id));
-  useShellTitle(q.data ? `${q.data.title}: prepare` : "Prepare a request");
+  useShellTitle(q.data ? t("{title}: prepare", { title: q.data.title }) : t("Prepare a request"));
   if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
   if (!q.data) return <PageLoading />;
   // Only a draft can be prepared: a sent request is followed, not edited.
@@ -144,11 +144,11 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
       </div>
       <header className="sg-prep-head">
         <div>
-          <h1 className="page-title">{draft.title.trim() || "Untitled request"}</h1>
+          <h1 className="page-title">{draft.title.trim() || t("Untitled request")}</h1>
           <p className="page-sub">
-            {[request.document_name, request.page_count ? `${request.page_count} ${request.page_count === 1 ? "page" : "pages"}` : null].filter(Boolean).join(" · ")}
-            {" · "}
-            <span aria-live="polite">{saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved"}</span>
+            {isolate([request.document_name, request.page_count ? `${request.page_count} ${request.page_count === 1 ? "page" : "pages"}` : null].filter(Boolean).join(" · "))}
+            {isolate(" · ")}
+            <span aria-live="polite">{saving ? t("Saving…") : dirty ? t("Unsaved changes") : t("Saved")}</span>
           </p>
         </div>
         <nav aria-label={t("Steps")} className="sg-steps-nav">
@@ -165,7 +165,7 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
                   <span className="sg-step-dot" aria-hidden="true">
                     {i < at ? <Check size={12} /> : i + 2}
                   </span>
-                  {s.label}
+                  {isolate(s.label)}
                 </button>
               </li>
             ))}
@@ -182,10 +182,10 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
             </Button>
           }
         >
-          {t("This request was changed somewhere else.")} {dirty ? "Your unsaved changes would be lost by loading it; saving now is refused." : ""}
+          {t("This request was changed somewhere else.")} {dirty ? t("Your unsaved changes would be lost by loading it; saving now is refused.") : ""}
         </Alert>
       )}
-      {error && <Alert tone="error">{error}</Alert>}
+      {error && <Alert tone="error">{isolate(error)}</Alert>}
 
       {step === "signers" && <SignersStep draft={draft} apply={apply} rows={rows} problems={problems} />}
       {step === "fields" && (
@@ -230,7 +230,7 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
   const inTurn = draft.signing_mode === "Sequential";
   const remove = async (s: SignerDraft) => {
     const boxes = draft.boxes.filter((b) => b.role.trim().toLowerCase() === s.role.trim().toLowerCase()).length;
-    if (boxes && !(await confirmDialog({ title: `Remove ${s.name || s.role}?`, message: `Their ${boxes} ${boxes === 1 ? "box goes" : "boxes go"} with them.`, confirmLabel: "Remove", danger: true }))) return;
+    if (boxes && !(await confirmDialog({ title: t("Remove {value}?", { value: s.name || s.role }), message: t("Their {boxes} {value} with them.", { boxes, value: boxes === 1 ? "box goes" : "boxes go" }), confirmLabel: t("Remove"), danger: true }))) return;
     apply((d) => removeSigner(d, s.key));
   };
   const shown = (step: "signers" | "details") => problems.filter((p) => p.step === step);
@@ -243,12 +243,12 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
         <div className="sg-segmented" role="group" aria-label={t("Signing order")}>
           {(["Sequential", "Parallel"] as const).map((m) => (
             <button key={m} type="button" aria-pressed={draft.signing_mode === m} onClick={() => apply((d) => ({ ...d, signing_mode: m }))}>
-              {m === "Sequential" ? "One after another" : "All at once"}
+              {m === "Sequential" ? t("One after another") : t("All at once")}
             </button>
           ))}
         </div>
         <p className="faint" style={{ fontSize: 12.5 }}>
-          {inTurn ? "Each person gets their link when the one before has signed. Give two people the same number to let them sign together." : "Everyone gets their link now and signs when they like."}
+          {inTurn ? t("Each person gets their link when the one before has signed. Give two people the same number to let them sign together.") : t("Everyone gets their link now and signs when they like.")}
         </p>
         {draft.signers.length === 0 && (
           <Alert tone="info">
@@ -260,16 +260,16 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
             <li key={s.key} className="sg-signer">
               <div className="sg-signer-head">
                 <span className={`sg-dot sg-c${colourOf(s.role, draft.signers.map((x) => x.role))}`} aria-hidden="true" />
-                <strong>{s.name.trim() || s.role.trim() || `Signer ${i + 1}`}</strong>
-                {inTurn && <Badge tone="neutral">{`Turn ${s.signing_order}`}</Badge>}
+                <strong>{s.name.trim() || s.role.trim() || t("Signer {value}", { value: i + 1 })}</strong>
+                {inTurn && <Badge tone="neutral">{t("Turn {signing_order}", { signing_order: s.signing_order })}</Badge>}
                 <span className="spacer" />
-                <button type="button" className="icon-btn" aria-label={`Move ${s.name || s.role} up`} disabled={i === 0} onClick={() => apply((d) => moveSigner(d, s.key, -1))}>
+                <button type="button" className="icon-btn" aria-label={t("Move {value} up", { value: s.name || s.role })} disabled={i === 0} onClick={() => apply((d) => moveSigner(d, s.key, -1))}>
                   <ArrowUp size={15} aria-hidden="true" />
                 </button>
-                <button type="button" className="icon-btn" aria-label={`Move ${s.name || s.role} down`} disabled={i === draft.signers.length - 1} onClick={() => apply((d) => moveSigner(d, s.key, 1))}>
+                <button type="button" className="icon-btn" aria-label={t("Move {value} down", { value: s.name || s.role })} disabled={i === draft.signers.length - 1} onClick={() => apply((d) => moveSigner(d, s.key, 1))}>
                   <ArrowDown size={15} aria-hidden="true" />
                 </button>
-                <button type="button" className="icon-btn" aria-label={`Remove ${s.name || s.role}`} onClick={() => void remove(s)}>
+                <button type="button" className="icon-btn" aria-label={t("Remove {value}", { value: s.name || s.role })} onClick={() => void remove(s)}>
                   <Trash size={15} aria-hidden="true" />
                 </button>
               </div>
@@ -299,7 +299,7 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
                 <Field
                   label={t("Access code")}
                   htmlFor={`s-code-${i}`}
-                  hint={s.hasCode ? "A code is set. Type a new one to replace it." : "Optional. Tell them separately; it is never emailed."}
+                  hint={s.hasCode ? t("A code is set. Type a new one to replace it.") : t("Optional. Tell them separately; it is never emailed.")}
                   error={rowMessage(rows, "signers", i, "access_code")}
                 >
                   <input id={`s-code-${i}`} className="input" value={s.accessCode} autoComplete="off" minLength={4} maxLength={64} onChange={(e) => apply((d) => editSigner(d, s.key, { accessCode: e.target.value }))} />
@@ -309,7 +309,7 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
                 .filter((p) => p.signer === s.key)
                 .map((p) => (
                   <p key={p.text} className="sg-hint-warn">
-                    {p.text}
+                    {isolate(p.text)}
                   </p>
                 ))}
             </li>
@@ -337,7 +337,7 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
         </Field>
         {shown("details").map((p) => (
           <p key={p.text} className="sg-hint-warn">
-            {p.text}
+            {isolate(p.text)}
           </p>
         ))}
       </section>
@@ -356,14 +356,14 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
     <div className="sg-prep-grid">
       <section className="stack" aria-labelledby="rev-head">
         <h2 id="rev-head" className="sg-h2">
-          {problems.length ? "Before it can go" : "Ready to send"}
+          {problems.length ? t("Before it can go") : t("Ready to send")}
         </h2>
         {problems.length > 0 && (
           <Alert tone="warning">
             <ul className="sg-problems">
               {problems.map((p) => (
                 <li key={p.text}>
-                  {p.text}{" "}
+                  {isolate(p.text)}{isolate(" ")}
                   <button type="button" className="link-btn" onClick={() => go(p.step === "fields" ? "fields" : "signers")}>
                     {t("Fix it")}
                   </button>
@@ -375,10 +375,10 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
         <dl className="sg-summary">
           <dt>{t("Document")}</dt>
           <dd>
-            {request.document_name}
+            {isolate(request.document_name ?? "")}
             <span className="faint">
-              {" "}
-              · {request.page_count} {request.page_count === 1 ? "page" : "pages"} {t("· fingerprint")} <span className="mono" title={request.document_sha256 ?? ""}>{short(request.document_sha256)}</span>
+              {isolate(" ")}
+              · {request.page_count} {request.page_count === 1 ? t("page") : t("pages")} {t("· fingerprint")} <span className="mono" title={request.document_sha256 ?? ""}>{isolate(short(request.document_sha256))}</span>
             </span>
           </dd>
           <dt>{t("Title")}</dt>
@@ -388,7 +388,7 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
           {draft.message.trim() && (
             <>
               <dt>{t("Message")}</dt>
-              <dd className="sg-pre">{draft.message}</dd>
+              <dd className="sg-pre">{isolate(draft.message)}</dd>
             </>
           )}
         </dl>
@@ -398,11 +398,11 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
             <li key={s.key}>
               <span className={`sg-dot sg-c${colourOf(s.role, draft.signers.map((x) => x.role))}`} aria-hidden="true" />
               <div>
-                <strong>{s.name || s.role}</strong> <span className="faint">{s.email}</span>
+                <strong>{s.name || s.role}</strong> <span className="faint">{isolate(s.email)}</span>
                 <div className="faint" style={{ fontSize: 12.5 }}>
-                  {s.role} · {boxCounts(draft.boxes, s.role)}
-                  {!parallel && ` · turn ${s.signing_order}`}
-                  {(s.hasCode || s.accessCode) && " · access code"}
+                  {isolate(s.role)} · {isolate(boxCounts(draft.boxes, s.role))}
+                  {!parallel && t(" · turn {signing_order}", { signing_order: s.signing_order })}
+                  {(s.hasCode || s.accessCode) && t(" · access code")}
                 </div>
               </div>
             </li>
@@ -415,8 +415,8 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
           {t("What happens next")}
         </h2>
         <ul className="sg-next">
-          <li>{first.length ? `${names(first)} ${first.length > 1 ? "get" : "gets"} a personal link to sign${parallel ? "" : " first"}.` : "Nobody has been added yet."}</li>
-          {!parallel && groups.length > 1 && <li>{t("The next")} {groups.length > 2 ? "people follow" : "person follows"} {t("when the ones before have signed.")}</li>}
+          <li>{first.length ? t("{first} {value} a personal link to sign{value2}.", { first: names(first), value: first.length > 1 ? "get" : "gets", value2: parallel ? "" : " first" }) : t("Nobody has been added yet.")}</li>
+          {!parallel && groups.length > 1 && <li>{t("The next")} {groups.length > 2 ? t("people follow") : t("person follows")} {t("when the ones before have signed.")}</li>}
           <li>{t("If your workspace can't send email, you are given each link to pass on.")}</li>
           <li>{t("You see who has opened and signed, can send reminders, and download the sealed copy when everyone has signed.")}</li>
         </ul>
