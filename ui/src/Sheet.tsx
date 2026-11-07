@@ -3,6 +3,7 @@
 
 import type { CSSProperties, ReactNode, Ref } from "react";
 import { placement, type Rect, type Size } from "./geometry";
+import { t } from "@ferrum/client";
 
 /** The style that puts a box where its points say on a sheet of this page. */
 export const boxStyle = (r: Rect, page: Size) => placement(r, page) as CSSProperties;
@@ -33,7 +34,7 @@ export function Sheet({
     <section className="sg-page" id={`page-${number}`} aria-label={`Page ${number} of ${count}`}>
       <header className="sg-page-head">
         <span>
-          Page {number} of {count}
+          {t("Page {number} of {count}", { number, count })}
         </span>
         {note && <span>{note}</span>}
       </header>
