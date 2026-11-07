@@ -4,13 +4,13 @@
 import { type DragEvent, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { FileUp } from "lucide-react";
-import { api, errorMessage, uploadFile, t } from "@ferrum/client";
+import { api, errorMessage, uploadFile, t, isolate } from "@ferrum/client";
 import { Alert, Button, Field, useShellTitle } from "@ferrum/kit";
 import { MAX_MB, refusal, sizeText, titleOf } from "./send";
 import { TemplateCards } from "./Templates";
 
 export function NewRequest() {
-  useShellTitle("New request");
+  useShellTitle(t("New request"));
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
@@ -63,8 +63,8 @@ export function NewRequest() {
           <FileUp size={22} aria-hidden="true" />
           {file ? (
             <span>
-              <strong>{file.name}</strong>
-              <span className="faint"> · {sizeText(file.size)} {t("· choose another")}</span>
+              <strong>{isolate(file.name)}</strong>
+              <span className="faint"> · {isolate(sizeText(file.size))} {t("· choose another")}</span>
             </span>
           ) : (
             <span>
@@ -73,7 +73,7 @@ export function NewRequest() {
             </span>
           )}
         </label>
-        {error && <Alert tone="error">{error}</Alert>}
+        {error && <Alert tone="error">{isolate(error)}</Alert>}
         {file && (
           <div className="stack">
             <Field label={t("Title")} htmlFor="new-title" hint={t("Signers see this in their email and on their page.")}>

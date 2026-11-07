@@ -31,7 +31,7 @@ export function Sheet({
   picture?: ReactNode;
 }) {
   return (
-    <section className="sg-page" id={`page-${number}`} aria-label={`Page ${number} of ${count}`}>
+    <section className="sg-page" id={`page-${number}`} aria-label={t("Page {number} of {count}", { number, count })}>
       <header className="sg-page-head">
         <span>
           {t("Page {number} of {count}", { number, count })}

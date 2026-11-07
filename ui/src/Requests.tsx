@@ -5,7 +5,7 @@ import { useInfiniteQuery, useQueries, useQueryClient } from "@tanstack/react-qu
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { Ellipsis, Plus } from "lucide-react";
-import { api, docPath, download, errorMessage, relativeTime, t as tr } from "@ferrum/client";
+import { api, docPath, download, errorMessage, relativeTime, t as tr, isolate } from "@ferrum/client";
 import { Badge, Button, confirmDialog, EmptyState, ErrorState, Spinner, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Skeleton } from "@ferrum/kit/primitives";
 import { act, refresh, requestQuery } from "./data";
@@ -29,7 +29,7 @@ export function Segments({ signers, mode }: { signers: Signer[]; mode: RequestRo
   const turn = turnOf({ signing_mode: mode, signers });
   const signed = signers.filter((s) => s.status === "Signed").length;
   return (
-    <span className="sg-segments" role="img" aria-label={`${signed} of ${signers.length} signed`}>
+    <span className="sg-segments" role="img" aria-label={tr("{signed} of {length} signed", { signed, length: signers.length })}>
       {signers.map((s, i) => (
         <span key={s.id ?? i} data-state={stepState(s, turn)} />
       ))}
@@ -38,7 +38,7 @@ export function Segments({ signers, mode }: { signers: Signer[]; mode: RequestRo
 }
 
 export function Requests() {
-  useShellTitle("Signatures");
+  useShellTitle(tr("Signatures"));
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [sp, setSp] = useSearchParams();
@@ -72,13 +72,13 @@ export function Requests() {
       const out = await act<{ reminded: LinkRow[] }>(r.id, "remind");
       refresh(qc, r.id);
       if (out.reminded.some((l) => !l.emailed)) setLinks(out.reminded);
-      else toast(`Reminder sent to ${out.reminded.map((l) => l.name || l.email).join(", ")}`);
+      else toast(tr("Reminder sent to {value}", { value: out.reminded.map((l) => l.name || l.email).join(", ") }));
     } catch (e) {
       toast(errorMessage(e), "error");
     }
   };
   const discard = async (r: RequestRow) => {
-    if (!(await confirmDialog({ title: `Delete “${r.title}”?`, message: "The draft goes. Nothing was sent.", confirmLabel: "Delete draft", danger: true }))) return;
+    if (!(await confirmDialog({ title: tr("Delete “{title}”?", { title: r.title }), message: tr("The draft goes. Nothing was sent."), confirmLabel: tr("Delete draft"), danger: true }))) return;
     try {
       await api.del(docPath("SignRequest", r.id), { ifMatch: r.version });
       refresh(qc);
@@ -110,7 +110,7 @@ export function Requests() {
       </Link>
     </EmptyState>
   ) : !shown.length ? (
-    <EmptyState title={search ? "Nothing matches" : tabInfo.empty} icon={search ? "search" : "check"}>
+    <EmptyState title={search ? tr("Nothing matches") : tabInfo.empty} icon={search ? "search" : "check"}>
       {search ? (
         <button type="button" className="link-btn" onClick={() => show({ q: null })}>
           {tr("Clear the search")}
@@ -130,15 +130,15 @@ export function Requests() {
         return (
           <li key={r.id} className="sg-row">
             <Link className="sg-row-main" to={r.status === "Draft" ? `/request/${r.id}/prepare` : `/request/${r.id}`}>
-              <span className="sg-row-title">{r.title}</span>
-              <span className="sg-row-meta">{[r.number, r.document_name].filter(Boolean).join(" · ")}</span>
+              <span className="sg-row-title">{isolate(r.title)}</span>
+              <span className="sg-row-meta">{isolate([r.number, r.document_name].filter(Boolean).join(" · "))}</span>
             </Link>
             <div className="sg-row-state">
-              <Badge tone={toneOf(r.status)}>{r.status}</Badge>
+              <Badge tone={toneOf(r.status)}>{isolate(r.status)}</Badge>
               {isOpen(r.status) &&
                 (d && s ? (
                   <>
-                    <span>{s.text}</span>
+                    <span>{isolate(s.text)}</span>
                     <Segments signers={d.signers} mode={d.signing_mode} />
                   </>
                 ) : (
@@ -147,23 +147,23 @@ export function Requests() {
             </div>
             <div className="sg-row-when">
               {left ? (
-                <Badge tone={left.level === "late" ? "red" : left.level === "soon" ? "amber" : "neutral"}>{left.text}</Badge>
+                <Badge tone={left.level === "late" ? "red" : left.level === "soon" ? "amber" : "neutral"}>{isolate(left.text)}</Badge>
               ) : r.completed_at ? (
-                <span title={moment(r.completed_at)}>{tr("Completed")} {relativeTime(r.completed_at)}</span>
+                <span title={moment(r.completed_at)}>{tr("Completed")} {isolate(relativeTime(r.completed_at))}</span>
               ) : r.sent_at ? (
-                <span title={moment(r.sent_at)}>{tr("Sent")} {relativeTime(r.sent_at)}</span>
+                <span title={moment(r.sent_at)}>{tr("Sent")} {isolate(relativeTime(r.sent_at))}</span>
               ) : r.created_at ? (
-                <span title={moment(r.created_at)}>{tr("Started")} {relativeTime(r.created_at)}</span>
+                <span title={moment(r.created_at)}>{tr("Started")} {isolate(relativeTime(r.created_at))}</span>
               ) : null}
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button type="button" className="icon-btn" aria-label={`Actions for ${r.title}`}>
+                <button type="button" className="icon-btn" aria-label={tr("Actions for {title}", { title: r.title })}>
                   <Ellipsis size={16} aria-hidden="true" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => navigate(r.status === "Draft" ? `/request/${r.id}/prepare` : `/request/${r.id}`)}>{r.status === "Draft" ? "Continue editing" : "Open"}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate(r.status === "Draft" ? `/request/${r.id}/prepare` : `/request/${r.id}`)}>{r.status === "Draft" ? tr("Continue editing") : tr("Open")}</DropdownMenuItem>
                 {isOpen(r.status) && <DropdownMenuItem onSelect={() => void remind(r)}>{tr("Send a reminder")}</DropdownMenuItem>}
                 {r.status === "Completed" && r.sealed_document && <DropdownMenuItem onSelect={() => void copy(r)}>{tr("Download the signed copy")}</DropdownMenuItem>}
                 {r.status === "Draft" && (
@@ -199,7 +199,7 @@ export function Requests() {
       <div className="sg-switch" role="tablist" aria-label={tr("Requests by where they stand")}>
         {TABS.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => show({ tab: t.id === "progress" ? null : t.id })}>
-            {t.label}
+            {isolate(t.label)}
             {q.data && <span className="sg-count-chip">{count(t.id)}</span>}
           </button>
         ))}

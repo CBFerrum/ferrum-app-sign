@@ -1,3 +1,4 @@
+import { t as tr } from "@ferrum/client";
 // What a signer's page decides, apart from drawing it: how the server's answers to a link are read,
 // which things the signer has to do and in what order, and the body that signs. Pure, so the rules
 // are tested without a browser. The server holds the rules (what a field accepts, who may sign now);
@@ -106,22 +107,22 @@ export function closedCopy(why: Why, requestStatus: string | null): { title: str
   switch (why) {
     case "signed":
       return {
-        title: "You've already signed",
+        title: tr("You've already signed"),
         text:
           requestStatus === "Completed"
             ? "Everyone has now signed. The sender has the sealed copy."
             : "Thank you. The others still have to sign; the sender is told when everyone has.",
       };
     case "declined":
-      return { title: "You declined to sign", text: "The sender was told and this request is closed. If you changed your mind, ask them to send a new one." };
+      return { title: tr("You declined to sign"), text: "The sender was told and this request is closed. If you changed your mind, ask them to send a new one." };
     case "completed":
-      return { title: "Everyone has signed", text: "This request is finished, so the link no longer works." };
+      return { title: tr("Everyone has signed"), text: "This request is finished, so the link no longer works." };
     case "request_declined":
-      return { title: "This request was declined", text: "Someone declined to sign, so it can't be signed any more. Contact the sender if you have questions." };
+      return { title: tr("This request was declined"), text: "Someone declined to sign, so it can't be signed any more. Contact the sender if you have questions." };
     case "voided":
-      return { title: "The sender withdrew this request", text: "There is nothing to sign any more. Contact the sender if you think this is a mistake." };
+      return { title: tr("The sender withdrew this request"), text: "There is nothing to sign any more. Contact the sender if you think this is a mistake." };
     case "expired":
-      return { title: "This request has expired", text: "The deadline has passed. Ask the sender to send a new request." };
+      return { title: tr("This request has expired"), text: "The deadline has passed. Ask the sender to send a new request." };
   }
 }
 
@@ -168,8 +169,8 @@ export function tasksOf(fields: SigningField[]): Task[] {
   shared("signature", "Signature", "Your signature");
   shared("initials", "Initials", "Your initials");
   for (const f of sorted) {
-    if (f.field_type === "Text") out.push({ key: f.id, kind: "text", label: f.label || "Text", required: f.required, fields: [f] });
-    if (f.field_type === "Checkbox") out.push({ key: f.id, kind: "checkbox", label: f.label || "Checkbox", required: f.required, fields: [f] });
+    if (f.field_type === "Text") out.push({ key: f.id, kind: "text", label: f.label || tr("Text"), required: f.required, fields: [f] });
+    if (f.field_type === "Checkbox") out.push({ key: f.id, kind: "checkbox", label: f.label || tr("Checkbox"), required: f.required, fields: [f] });
   }
   return out.sort((a, b) => readingOrder(a.fields[0], b.fields[0]) || a.key.localeCompare(b.key));
 }

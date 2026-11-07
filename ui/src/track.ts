@@ -4,14 +4,15 @@
 
 import { plural } from "./time";
 import type { SignEvent, Signer, SignRequest, Status } from "./model";
+import { t as tr } from "@ferrum/client";
 
 export type TabId = "progress" | "drafts" | "completed" | "closed";
 
 export const TABS: { id: TabId; label: string; statuses: Status[]; empty: string }[] = [
-  { id: "progress", label: "In progress", statuses: ["Sent", "In Progress"], empty: "Nothing is waiting on a signature." },
-  { id: "drafts", label: "Drafts", statuses: ["Draft"], empty: "No drafts. A request you start and don't send waits here." },
-  { id: "completed", label: "Completed", statuses: ["Completed"], empty: "Nothing has been fully signed yet." },
-  { id: "closed", label: "Closed", statuses: ["Declined", "Expired", "Voided"], empty: "Nothing was declined, withdrawn or left to expire." },
+  { id: "progress", get label() { return tr("In progress"); }, statuses: ["Sent", "In Progress"], get empty() { return tr("Nothing is waiting on a signature."); } },
+  { id: "drafts", get label() { return tr("Drafts"); }, statuses: ["Draft"], get empty() { return tr("No drafts. A request you start and don't send waits here."); } },
+  { id: "completed", get label() { return tr("Completed"); }, statuses: ["Completed"], get empty() { return tr("Nothing has been fully signed yet."); } },
+  { id: "closed", get label() { return tr("Closed"); }, statuses: ["Declined", "Expired", "Voided"], get empty() { return tr("Nothing was declined, withdrawn or left to expire."); } },
 ];
 
 export const tabOf = (status: string): TabId => TABS.find((t) => t.statuses.includes(status as Status))?.id ?? "progress";
@@ -118,27 +119,27 @@ export function told(e: SignEvent): Told {
   const detail = e.details?.trim() ?? "";
   switch (e.event) {
     case "Sent":
-      return { title: `Sent to ${name}`, detail, tone: "plain" };
+      return { title: tr("Sent to {name}", { name }), detail, tone: "plain" };
     case "Viewed":
-      return { title: `${name} opened the document`, detail: "", tone: "plain" };
+      return { title: tr("{name} opened the document", { name }), detail: "", tone: "plain" };
     case "Signed":
-      return { title: `${name} signed`, detail: detail ? `Signature ${detail.replace(/^signature /, "")}` : "", tone: "good" };
+      return { title: tr("{name} signed", { name }), detail: detail ? `Signature ${detail.replace(/^signature /, "")}` : "", tone: "good" };
     case "Declined":
-      return { title: `${name} declined`, detail: detail ? `“${detail}”` : "", tone: "bad" };
+      return { title: tr("{name} declined", { name }), detail: detail ? `“${detail}”` : "", tone: "bad" };
     case "Reminded":
-      return { title: `Reminder for ${name}`, detail, tone: "plain" };
+      return { title: tr("Reminder for {name}", { name }), detail, tone: "plain" };
     case "Resent":
-      return { title: `Link sent again to ${name}`, detail, tone: "plain" };
+      return { title: tr("Link sent again to {name}", { name }), detail, tone: "plain" };
     case "Corrected":
-      return { title: `Details of ${name} corrected`, detail, tone: "plain" };
+      return { title: tr("Details of {name} corrected", { name }), detail, tone: "plain" };
     case "Access Denied":
-      return { title: `Wrong access code for ${name}`, detail, tone: "bad" };
+      return { title: tr("Wrong access code for {name}", { name }), detail, tone: "bad" };
     case "Voided":
-      return { title: "Withdrawn by the sender", detail: detail ? `“${detail}”` : "", tone: "bad" };
+      return { title: tr("Withdrawn by the sender"), detail: detail ? `“${detail}”` : "", tone: "bad" };
     case "Expired":
-      return { title: "Expired before everyone signed", detail: "", tone: "bad" };
+      return { title: tr("Expired before everyone signed"), detail: "", tone: "bad" };
     case "Completed":
-      return { title: "Everyone signed and the document was sealed", detail: "", tone: "good" };
+      return { title: tr("Everyone signed and the document was sealed"), detail: "", tone: "good" };
     default:
       return { title: e.event, detail, tone: "plain" };
   }
@@ -167,7 +168,7 @@ export interface Check {
 export function checks(v: Verify): Check[] {
   const out: Check[] = [
     {
-      label: "The original document",
+      label: tr("The original document"),
       ok: v.original.ok,
       detail: v.original.ok ? "Stored unchanged: it still has the fingerprint recorded when it was sent." : (v.original.error ?? "It no longer matches the fingerprint recorded when it was sent."),
       recorded: v.original.expected ?? undefined,
@@ -176,7 +177,7 @@ export function checks(v: Verify): Check[] {
   ];
   if (v.sealed) {
     out.push({
-      label: "The signed copy",
+      label: tr("The signed copy"),
       ok: v.sealed.ok,
       detail: v.sealed.ok
         ? "Stored unchanged, and it opens as a PDF."
@@ -186,7 +187,7 @@ export function checks(v: Verify): Check[] {
     });
   }
   out.push({
-    label: "The audit trail",
+    label: tr("The audit trail"),
     ok: v.audit_trail.ok,
     detail: v.audit_trail.ok ? `${plural(v.audit_trail.events, "event")}, each tied to the one before it.` : (v.audit_trail.problem ?? "The trail doesn't add up."),
   });

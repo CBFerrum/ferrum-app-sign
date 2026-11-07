@@ -4,7 +4,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { Link, useParams } from "react-router";
-import { api, ApiError, docPath, download, errorMessage, t } from "@ferrum/client";
+import { api, ApiError, docPath, download, errorMessage, t, isolate } from "@ferrum/client";
 import { Alert, Button, ErrorState, PageLoading, toast, useShellTitle, useUnsavedGuard } from "@ferrum/kit";
 import { templateQuery } from "./data";
 import { Editor, useBoxes } from "./Editor";
@@ -14,7 +14,7 @@ import { sameBoxes, toBoxes, toRows } from "./placement";
 export function TemplateFieldsRoute() {
   const { id = "" } = useParams();
   const q = useQuery(templateQuery(id));
-  useShellTitle(q.data ? `${q.data.template_name}: boxes` : "Template boxes");
+  useShellTitle(q.data ? t("{template_name}: boxes", { template_name: q.data.template_name }) : t("Template boxes"));
   if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
   if (!q.data) return <PageLoading />;
   return <TemplateFields key={id} template={q.data} />;
@@ -55,10 +55,10 @@ function TemplateFields({ template }: { template: Template }) {
       </div>
       <header className="sg-prep-head">
         <div>
-          <h1 className="page-title">{template.template_name}</h1>
+          <h1 className="page-title">{isolate(template.template_name)}</h1>
           <p className="page-sub">
-            {t("Where each role signs, for every request made from this template ·")}{" "}
-            <span aria-live="polite">{saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved"}</span>
+            {t("Where each role signs, for every request made from this template ·")}{isolate(" ")}
+            <span aria-live="polite">{saving ? t("Saving…") : dirty ? t("Unsaved changes") : t("Saved")}</span>
           </p>
         </div>
         <div className="page-actions">
@@ -70,7 +70,7 @@ function TemplateFields({ template }: { template: Template }) {
           </Button>
         </div>
       </header>
-      {error && <Alert tone="error">{error}</Alert>}
+      {error && <Alert tone="error">{isolate(error)}</Alert>}
       <Editor ed={ed} roles={roles} pages={pageSizes(template)} document={template.document} onPdf={() => download(template.document ?? "", template.document_name ?? "template.pdf").catch((e) => toast(errorMessage(e), "error"))} />
       {dialog}
     </div>

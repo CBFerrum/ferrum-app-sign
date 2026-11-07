@@ -6,6 +6,7 @@
 import type { Rect, Size } from "./geometry";
 import { type FieldRow, num } from "./model";
 import type { FieldType } from "./signing";
+import { t as tr } from "@ferrum/client";
 
 /** A box as the editor holds it, in points from the top left of the page as displayed. */
 export interface Box extends Rect {
@@ -24,12 +25,12 @@ export const MIN_SIZE = 4;
 
 /** The kinds of box, with the size a new one has. */
 export const KINDS: { type: FieldType; label: string; hint: string; size: [number, number] }[] = [
-  { type: "Signature", label: "Signature", hint: "The signer draws or types it", size: [160, 44] },
-  { type: "Initials", label: "Initials", hint: "Their initials", size: [56, 32] },
-  { type: "Date Signed", label: "Date signed", hint: "Filled in with the day they sign", size: [96, 22] },
-  { type: "Name", label: "Name", hint: "Filled in with their name", size: [160, 22] },
-  { type: "Text", label: "Text", hint: "A line they type", size: [160, 22] },
-  { type: "Checkbox", label: "Checkbox", hint: "A box they tick", size: [18, 18] },
+  { type: "Signature", get label() { return tr("Signature"); }, get hint() { return tr("The signer draws or types it"); }, size: [160, 44] },
+  { type: "Initials", get label() { return tr("Initials"); }, get hint() { return tr("Their initials"); }, size: [56, 32] },
+  { type: "Date Signed", get label() { return tr("Date signed"); }, get hint() { return tr("Filled in with the day they sign"); }, size: [96, 22] },
+  { type: "Name", get label() { return tr("Name"); }, get hint() { return tr("Filled in with their name"); }, size: [160, 22] },
+  { type: "Text", get label() { return tr("Text"); }, get hint() { return tr("A line they type"); }, size: [160, 22] },
+  { type: "Checkbox", get label() { return tr("Checkbox"); }, get hint() { return tr("A box they tick"); }, size: [18, 18] },
 ];
 
 export const kindOf = (t: FieldType) => KINDS.find((k) => k.type === t) ?? KINDS[0];
