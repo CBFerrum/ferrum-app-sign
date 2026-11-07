@@ -99,7 +99,7 @@ export function classify(status: number, body: unknown, sentCode: boolean): Reac
     return { kind: "closed", why, requestStatus: request };
   }
   if (status === 429) return { kind: "locked", message: sentence(message) || "Too many wrong codes. Try again in a few minutes." };
-  return { kind: "failed", message: sentence(message) || `Something went wrong (${status}).` };
+  return { kind: "failed", message: sentence(message) || tr("Something went wrong ({status}).", { status }) };
 }
 
 /** The words for a link that can no longer be used. */
@@ -215,9 +215,9 @@ export function actionLabel(next: Task | null): string {
     case "initials":
       return "Add your initials";
     case "text":
-      return `Fill in “${next.label}”`;
+      return tr("Fill in “{label}”", { label: next.label });
     case "checkbox":
-      return `Tick “${next.label}”`;
+      return tr("Tick “{label}”", { label: next.label });
   }
 }
 
@@ -229,8 +229,8 @@ export function pagesWithFields(fields: SigningField[]): number[] {
 /** "pages 2 and 4", "page 3", "pages 1, 2 and 5". */
 export function pagesText(pages: number[]): string {
   if (pages.length === 0) return "";
-  if (pages.length === 1) return `page ${pages[0]}`;
-  return `pages ${pages.slice(0, -1).join(", ")} and ${pages[pages.length - 1]}`;
+  if (pages.length === 1) return tr("page {value}", { value: pages[0] });
+  return tr("pages {value} and {value2}", { value: pages.slice(0, -1).join(", "), value2: pages[pages.length - 1] });
 }
 
 /** Initials from a name, as the server makes them: a letter of each word, at most four. */

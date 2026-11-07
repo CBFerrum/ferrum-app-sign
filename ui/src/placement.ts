@@ -204,4 +204,4 @@ export const lacksSignature = (boxes: Box[], roles: string[]): string[] =>
   roles.filter((r) => !boxes.some((b) => b.field_type === "Signature" && b.required && b.role.trim().toLowerCase() === r.trim().toLowerCase()));
 
 /** A box said in words, for people who do not see it. */
-export const describe = (b: Box) => `${kindOf(b.field_type).label}${b.label ? ` “${b.label}”` : ""} for ${b.role}, page ${b.page}`;
+export const describe = (b: Box) => (b.label ? tr("{kind} “{label}” for {role}, page {page}", { kind: kindOf(b.field_type).label, label: b.label, role: b.role, page: b.page }) : tr("{kind} for {role}, page {page}", { kind: kindOf(b.field_type).label, role: b.role, page: b.page }));

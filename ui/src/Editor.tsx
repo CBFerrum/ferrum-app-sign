@@ -106,7 +106,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
     ed.set((prev) => [...prev, b]);
     setSelected(b.key);
     focusBox(b.key);
-    say(`Added: ${describe(b)}. Arrow keys move it.`);
+    say(t("Added: {b}. Arrow keys move it.", { b: String(describe(b)) }));
   };
   const remove = (key: string) => {
     const gone = boxes.find((b) => b.key === key);
@@ -117,7 +117,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
   const everyPage = (b: Box) => {
     const copies = spread(b, pages, boxes);
     if (copies.length) ed.set((prev) => [...prev, ...copies]);
-    say(copies.length ? `Copied to ${copies.length} more ${copies.length === 1 ? "page" : "pages"}.` : "It is already on every page.");
+    say(copies.length ? (copies.length === 1 ? t("Copied to 1 more page.") : t("Copied to {n} more pages.", { n: copies.length })) : "It is already on every page.");
   };
   const duplicate = (b: Box) => {
     const c = copyOf(b, pages[b.page - 1] ?? { width: 612, height: 792 });

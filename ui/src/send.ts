@@ -5,6 +5,7 @@
 
 import type { SignRequest, Template } from "./model";
 import { type Box, lacksSignature, newKey, sameBoxes, toBoxes, toRows } from "./placement";
+import { t as tr } from "@ferrum/client";
 
 export interface SignerDraft {
   key: string;
@@ -76,7 +77,7 @@ export const changed = (a: Draft, b: Draft) =>
 /** "Signer 3": the first name for a role that nobody has. */
 export function nextRole(signers: SignerDraft[]): string {
   const taken = new Set(signers.map((s) => s.role.trim().toLowerCase()));
-  for (let n = signers.length + 1; ; n++) if (!taken.has(`signer ${n}`)) return `Signer ${n}`;
+  for (let n = signers.length + 1; ; n++) if (!taken.has(`signer ${n}`)) return tr("Signer {n}", { n });
 }
 
 export function addSigner(d: Draft): Draft {
@@ -138,18 +139,18 @@ export function sendProblems(d: Draft, today: string): Problem[] {
   if (!d.signers.length) out.push({ step: "signers", text: "Add at least one person to sign." });
   const seen = new Set<string>();
   d.signers.forEach((s, i) => {
-    const who = s.name.trim() || s.role.trim() || `Signer ${i + 1}`;
+    const who = s.name.trim() || s.role.trim() || tr("Signer {value}", { value: i + 1 });
     const role = s.role.trim().toLowerCase();
-    if (!role) out.push({ step: "signers", signer: s.key, text: `${who} needs a role.` });
-    else if (seen.has(role)) out.push({ step: "signers", signer: s.key, text: `Two people are called “${s.role.trim()}”: roles must differ.` });
+    if (!role) out.push({ step: "signers", signer: s.key, text: tr("{who} needs a role.", { who }) });
+    else if (seen.has(role)) out.push({ step: "signers", signer: s.key, text: tr("Two people are called “{value}”: roles must differ.", { value: s.role.trim() }) });
     seen.add(role);
-    if (!s.name.trim()) out.push({ step: "signers", signer: s.key, text: `${s.role.trim() || `Signer ${i + 1}`} needs a name.` });
-    if (!s.email.trim()) out.push({ step: "signers", signer: s.key, text: `${who} needs an email address.` });
-    else if (!looksLikeEmail(s.email)) out.push({ step: "signers", signer: s.key, text: `“${s.email.trim()}” doesn't look like an email address.` });
+    if (!s.name.trim()) out.push({ step: "signers", signer: s.key, text: tr("{value} needs a name.", { value: s.role.trim() || `Signer ${i + 1}` }) });
+    if (!s.email.trim()) out.push({ step: "signers", signer: s.key, text: tr("{who} needs an email address.", { who }) });
+    else if (!looksLikeEmail(s.email)) out.push({ step: "signers", signer: s.key, text: tr("“{value}” doesn't look like an email address.", { value: s.email.trim() }) });
   });
   for (const role of lacksSignature(d.boxes, d.signers.map((s) => s.role).filter((r) => r.trim()))) {
     const s = d.signers.find((x) => x.role === role);
-    out.push({ step: "fields", signer: s?.key, text: `${s?.name.trim() || role} has no signature box. Place a required Signature box for them.` });
+    out.push({ step: "fields", signer: s?.key, text: tr("{value} has no signature box. Place a required Signature box for them.", { value: s?.name.trim() || role }) });
   }
   if (d.expires_on && d.expires_on < today) out.push({ step: "details", text: "The deadline is in the past." });
   return out;
@@ -207,14 +208,14 @@ export const titleOf = (fileName: string) => fileName.replace(/\.pdf$/i, "").rep
 /** A file's size as people read it: "776 bytes", "48 KB", "2.4 MB". */
 export function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
-  if (bytes < 1000 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1000 * 1024) return tr("{n} KB", { n: Math.round(bytes / 1024) });
+  return tr("{value} MB", { value: (bytes / 1024 / 1024).toFixed(1) });
 }
 
 /** Why a file cannot be sent, before it goes anywhere. */
 export function refusal(f: { name: string; type: string; size: number }): string | null {
   if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") return "Only PDF files can be signed here.";
-  if (f.size > MAX_MB * 1024 * 1024) return `That file is larger than ${MAX_MB} MB.`;
+  if (f.size > MAX_MB * 1024 * 1024) return tr("That file is larger than {MAX_MB} MB.", { MAX_MB });
   if (f.size === 0) return "That file is empty.";
   return null;
 }

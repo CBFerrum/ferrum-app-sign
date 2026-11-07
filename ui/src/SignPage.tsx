@@ -388,7 +388,7 @@ export function Ready({
       // (a busy server, a code that stopped working) leaves what was filled in where it is.
       if (r.status === 404 || r.status === 410) return onChange(classify(r.status, body, hasCode));
       if (r.status === 409) return reopen();
-      setError(sentence(body?.message ?? "") || `Something went wrong (${r.status}).`);
+      setError(sentence(body?.message ?? "") || tr("Something went wrong ({status}).", { status: r.status }));
     } catch {
       setError(OFFLINE);
     } finally {
@@ -408,7 +408,7 @@ export function Ready({
         onChange(classify(r.status, body, hasCode));
         return null;
       }
-      return sentence(body?.fields?.[0]?.message ?? body?.message ?? "") || `Something went wrong (${r.status}).`;
+      return sentence(body?.fields?.[0]?.message ?? body?.message ?? "") || tr("Something went wrong ({status}).", { status: r.status });
     } catch {
       return OFFLINE;
     }
@@ -488,7 +488,7 @@ export function Ready({
                 count={request.pages.length}
                 size={size}
                 picture={pdf && <PdfPage pdf={pdf} number={n} />}
-                note={here.length ? `${here.length} ${here.length === 1 ? "box" : "boxes"} for you` : undefined}
+                note={here.length ? (here.length === 1 ? tr("1 box for you") : tr("{n} boxes for you", { n: here.length })) : undefined}
               >
                 {here.map((f) => {
                   const task = tasks.find((t) => t.fields.some((x) => x.id === f.id));
