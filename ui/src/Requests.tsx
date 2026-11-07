@@ -5,7 +5,7 @@ import { useInfiniteQuery, useQueries, useQueryClient } from "@tanstack/react-qu
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { Ellipsis, Plus } from "lucide-react";
-import { api, docPath, download, errorMessage, relativeTime } from "@ferrum/client";
+import { api, docPath, download, errorMessage, relativeTime, t as tr } from "@ferrum/client";
 import { Badge, Button, confirmDialog, EmptyState, ErrorState, Spinner, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Skeleton } from "@ferrum/kit/primitives";
 import { act, refresh, requestQuery } from "./data";
@@ -82,7 +82,7 @@ export function Requests() {
     try {
       await api.del(docPath("SignRequest", r.id), { ifMatch: r.version });
       refresh(qc);
-      toast("Draft deleted");
+      toast(tr("Draft deleted"));
     } catch (e) {
       toast(errorMessage(e), "error");
     }
@@ -99,25 +99,25 @@ export function Requests() {
   const body = q.error ? (
     <ErrorState error={q.error} onRetry={() => void q.refetch()} />
   ) : !q.data ? (
-    <Spinner label="Loading your requests" />
+    <Spinner label={tr("Loading your requests")} />
   ) : !rows.length ? (
-    <EmptyState title="Send your first document for signature" icon="file">
+    <EmptyState title={tr("Send your first document for signature")} icon="file">
       <p className="muted" style={{ maxWidth: "34rem" }}>
-        Upload a PDF, say who signs and where, and each person gets a link to sign on any device, with no account. You see who has signed, and the finished document keeps an audit trail.
+        {tr("Upload a PDF, say who signs and where, and each person gets a link to sign on any device, with no account. You see who has signed, and the finished document keeps an audit trail.")}
       </p>
       <Link className="btn btn-primary btn-md" to="/new">
-        <Plus size={15} aria-hidden="true" /> New request
+        <Plus size={15} aria-hidden="true" /> {tr("New request")}
       </Link>
     </EmptyState>
   ) : !shown.length ? (
     <EmptyState title={search ? "Nothing matches" : tabInfo.empty} icon={search ? "search" : "check"}>
       {search ? (
         <button type="button" className="link-btn" onClick={() => show({ q: null })}>
-          Clear the search
+          {tr("Clear the search")}
         </button>
       ) : (
         (tab === "progress" || tab === "drafts") && (
-          <Link to="/new">Start a request</Link>
+          <Link to="/new">{tr("Start a request")}</Link>
         )
       )}
     </EmptyState>
@@ -149,11 +149,11 @@ export function Requests() {
               {left ? (
                 <Badge tone={left.level === "late" ? "red" : left.level === "soon" ? "amber" : "neutral"}>{left.text}</Badge>
               ) : r.completed_at ? (
-                <span title={moment(r.completed_at)}>Completed {relativeTime(r.completed_at)}</span>
+                <span title={moment(r.completed_at)}>{tr("Completed")} {relativeTime(r.completed_at)}</span>
               ) : r.sent_at ? (
-                <span title={moment(r.sent_at)}>Sent {relativeTime(r.sent_at)}</span>
+                <span title={moment(r.sent_at)}>{tr("Sent")} {relativeTime(r.sent_at)}</span>
               ) : r.created_at ? (
-                <span title={moment(r.created_at)}>Started {relativeTime(r.created_at)}</span>
+                <span title={moment(r.created_at)}>{tr("Started")} {relativeTime(r.created_at)}</span>
               ) : null}
             </div>
             <DropdownMenu>
@@ -164,12 +164,12 @@ export function Requests() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onSelect={() => navigate(r.status === "Draft" ? `/request/${r.id}/prepare` : `/request/${r.id}`)}>{r.status === "Draft" ? "Continue editing" : "Open"}</DropdownMenuItem>
-                {isOpen(r.status) && <DropdownMenuItem onSelect={() => void remind(r)}>Send a reminder</DropdownMenuItem>}
-                {r.status === "Completed" && r.sealed_document && <DropdownMenuItem onSelect={() => void copy(r)}>Download the signed copy</DropdownMenuItem>}
+                {isOpen(r.status) && <DropdownMenuItem onSelect={() => void remind(r)}>{tr("Send a reminder")}</DropdownMenuItem>}
+                {r.status === "Completed" && r.sealed_document && <DropdownMenuItem onSelect={() => void copy(r)}>{tr("Download the signed copy")}</DropdownMenuItem>}
                 {r.status === "Draft" && (
                   <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={() => void discard(r)}>Delete draft…</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => void discard(r)}>{tr("Delete draft…")}</DropdownMenuItem>
                   </>
                 )}
               </DropdownMenuContent>
@@ -190,13 +190,13 @@ export function Requests() {
           </p>
         </div>
         <div className="sg-tools">
-          <input className="input sg-search" type="search" placeholder="Find a request…" aria-label="Find a request" value={search} onChange={(e) => show({ q: e.target.value || null })} />
+          <input className="input sg-search" type="search" placeholder={tr("Find a request…")} aria-label={tr("Find a request")} value={search} onChange={(e) => show({ q: e.target.value || null })} />
           <Link className="btn btn-primary btn-md" to="/new">
-            <Plus size={15} aria-hidden="true" /> New request
+            <Plus size={15} aria-hidden="true" /> {tr("New request")}
           </Link>
         </div>
       </header>
-      <div className="sg-switch" role="tablist" aria-label="Requests by where they stand">
+      <div className="sg-switch" role="tablist" aria-label={tr("Requests by where they stand")}>
         {TABS.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => show({ tab: t.id === "progress" ? null : t.id })}>
             {t.label}
@@ -207,10 +207,10 @@ export function Requests() {
       {body}
       {q.hasNextPage && (
         <Button loading={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>
-          Show older requests
+          {tr("Show older requests")}
         </Button>
       )}
-      <LinksDialog open={links !== null} title="Reminder links" links={links ?? []} onClose={() => setLinks(null)} />
+      <LinksDialog open={links !== null} title={tr("Reminder links")} links={links ?? []} onClose={() => setLinks(null)} />
     </div>
   );
 }

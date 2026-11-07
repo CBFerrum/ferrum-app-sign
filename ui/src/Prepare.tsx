@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { ArrowDown, ArrowUp, Check, Info, Plus, Send, Trash } from "lucide-react";
-import { api, ApiError, docPath, download, errorMessage, type FieldError, todayIso } from "@ferrum/client";
+import { api, ApiError, docPath, download, errorMessage, type FieldError, todayIso, t } from "@ferrum/client";
 import { Alert, Badge, Button, confirmDialog, ErrorState, Field, PageLoading, toast, useLiveEntity, useShellTitle, useUnsavedGuard } from "@ferrum/kit";
 import { refresh, requestQuery, sendRequest } from "./data";
 import { Editor, useBoxes } from "./Editor";
@@ -140,7 +140,7 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
   return (
     <div className="sg-app sg-prepare">
       <div className="crumbs">
-        <Link to="/">Signatures</Link>
+        <Link to="/">{t("Signatures")}</Link>
       </div>
       <header className="sg-prep-head">
         <div>
@@ -151,13 +151,13 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
             <span aria-live="polite">{saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved"}</span>
           </p>
         </div>
-        <nav aria-label="Steps" className="sg-steps-nav">
+        <nav aria-label={t("Steps")} className="sg-steps-nav">
           <ol>
             <li data-state="done">
               <span className="sg-step-dot" aria-hidden="true">
                 <Check size={12} />
               </span>
-              Document
+              {t("Document")}
             </li>
             {STEPS.map((s, i) => (
               <li key={s.id} data-state={i < at ? "done" : i === at ? "now" : undefined}>
@@ -178,11 +178,11 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
           tone="warning"
           action={
             <Button size="sm" onClick={() => void reload()}>
-              Load their version
+              {t("Load their version")}
             </Button>
           }
         >
-          This request was changed somewhere else. {dirty ? "Your unsaved changes would be lost by loading it; saving now is refused." : ""}
+          {t("This request was changed somewhere else.")} {dirty ? "Your unsaved changes would be lost by loading it; saving now is refused." : ""}
         </Alert>
       )}
       {error && <Alert tone="error">{error}</Alert>}
@@ -201,19 +201,19 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
 
       <footer className="sg-prep-foot">
         <Button disabled={at <= 0 || saving || sending} onClick={() => void go(STEPS[at - 1].id)}>
-          Back
+          {t("Back")}
         </Button>
         <span className="spacer" />
         <Button loading={saving && !sending} disabled={!dirty || sending} onClick={() => void save()}>
-          Save draft
+          {t("Save draft")}
         </Button>
         {step !== "review" ? (
           <Button variant="primary" disabled={saving} onClick={() => void go(STEPS[at + 1].id)}>
-            Continue
+            {t("Continue")}
           </Button>
         ) : (
           <Button variant="primary" loading={sending} disabled={problems.length > 0 || saving} onClick={() => void send()}>
-            <Send size={15} aria-hidden="true" /> Send for signature
+            <Send size={15} aria-hidden="true" /> {t("Send for signature")}
           </Button>
         )}
       </footer>
@@ -238,9 +238,9 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
     <div className="sg-prep-grid">
       <section className="stack" aria-labelledby="who-head">
         <h2 id="who-head" className="sg-h2">
-          Who signs
+          {t("Who signs")}
         </h2>
-        <div className="sg-segmented" role="group" aria-label="Signing order">
+        <div className="sg-segmented" role="group" aria-label={t("Signing order")}>
           {(["Sequential", "Parallel"] as const).map((m) => (
             <button key={m} type="button" aria-pressed={draft.signing_mode === m} onClick={() => apply((d) => ({ ...d, signing_mode: m }))}>
               {m === "Sequential" ? "One after another" : "All at once"}
@@ -252,7 +252,7 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
         </p>
         {draft.signers.length === 0 && (
           <Alert tone="info">
-            Add the people who sign. Each gets a personal link by email, with no account needed; you place where they sign on the next step.
+            {t("Add the people who sign. Each gets a personal link by email, with no account needed; you place where they sign on the next step.")}
           </Alert>
         )}
         <ol className="sg-signers">
@@ -274,14 +274,14 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
                 </button>
               </div>
               <div className="form-grid" style={{ "--cols": inTurn ? 3 : 2 } as CSSProperties}>
-                <Field label="Name" htmlFor={`s-name-${i}`} required error={rowMessage(rows, "signers", i, "name")}>
+                <Field label={t("Name")} htmlFor={`s-name-${i}`} required error={rowMessage(rows, "signers", i, "name")}>
                   <input id={`s-name-${i}`} className="input" value={s.name} autoComplete="off" onChange={(e) => apply((d) => editSigner(d, s.key, { name: e.target.value }))} />
                 </Field>
-                <Field label="Email" htmlFor={`s-email-${i}`} required error={rowMessage(rows, "signers", i, "email") ?? (s.email.trim() && !looksLikeEmail(s.email) ? "This doesn't look like an email address." : undefined)}>
+                <Field label={t("Email")} htmlFor={`s-email-${i}`} required error={rowMessage(rows, "signers", i, "email") ?? (s.email.trim() && !looksLikeEmail(s.email) ? "This doesn't look like an email address." : undefined)}>
                   <input id={`s-email-${i}`} className="input" type="email" value={s.email} autoComplete="off" onChange={(e) => apply((d) => editSigner(d, s.key, { email: e.target.value }))} />
                 </Field>
                 {inTurn && (
-                  <Field label="Turn" htmlFor={`s-turn-${i}`} hint="Same number: together.">
+                  <Field label={t("Turn")} htmlFor={`s-turn-${i}`} hint={t("Same number: together.")}>
                     <input
                       id={`s-turn-${i}`}
                       className="input num"
@@ -293,11 +293,11 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
                     />
                   </Field>
                 )}
-                <Field label="Role" htmlFor={`s-role-${i}`} required hint="What they are in this document, such as Client. Their boxes go with it." error={rowMessage(rows, "signers", i, "role")}>
+                <Field label={t("Role")} htmlFor={`s-role-${i}`} required hint={t("What they are in this document, such as Client. Their boxes go with it.")} error={rowMessage(rows, "signers", i, "role")}>
                   <input id={`s-role-${i}`} className="input" value={s.role} maxLength={60} autoComplete="off" onChange={(e) => apply((d) => editSigner(d, s.key, { role: e.target.value }))} />
                 </Field>
                 <Field
-                  label="Access code"
+                  label={t("Access code")}
                   htmlFor={`s-code-${i}`}
                   hint={s.hasCode ? "A code is set. Type a new one to replace it." : "Optional. Tell them separately; it is never emailed."}
                   error={rowMessage(rows, "signers", i, "access_code")}
@@ -317,22 +317,22 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
         </ol>
         <div>
           <Button onClick={() => apply((d) => addSigner(d))}>
-            <Plus size={15} aria-hidden="true" /> Add a signer
+            <Plus size={15} aria-hidden="true" /> {t("Add a signer")}
           </Button>
         </div>
       </section>
 
       <section className="stack" aria-labelledby="about-head">
         <h2 id="about-head" className="sg-h2">
-          About this request
+          {t("About this request")}
         </h2>
-        <Field label="Title" htmlFor="d-title" required hint="Signers see this in their email and on their page.">
+        <Field label={t("Title")} htmlFor="d-title" required hint={t("Signers see this in their email and on their page.")}>
           <input id="d-title" className="input" value={draft.title} maxLength={200} onChange={(e) => apply((d) => ({ ...d, title: e.target.value }))} />
         </Field>
-        <Field label="Message to the signers" htmlFor="d-message" hint="Optional.">
+        <Field label={t("Message to the signers")} htmlFor="d-message" hint={t("Optional.")}>
           <textarea id="d-message" className="textarea" rows={4} maxLength={5000} value={draft.message} onChange={(e) => apply((d) => ({ ...d, message: e.target.value }))} />
         </Field>
-        <Field label="Last day to sign" htmlFor="d-expires" hint="Empty: the workspace's usual time after sending. Links stop working at the end of that day.">
+        <Field label={t("Last day to sign")} htmlFor="d-expires" hint={t("Empty: the workspace's usual time after sending. Links stop working at the end of that day.")}>
           <input id="d-expires" className="input" type="date" min={todayIso()} value={draft.expires_on} onChange={(e) => apply((d) => ({ ...d, expires_on: e.target.value }))} />
         </Field>
         {shown("details").map((p) => (
@@ -365,7 +365,7 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
                 <li key={p.text}>
                   {p.text}{" "}
                   <button type="button" className="link-btn" onClick={() => go(p.step === "fields" ? "fields" : "signers")}>
-                    Fix it
+                    {t("Fix it")}
                   </button>
                 </li>
               ))}
@@ -373,26 +373,26 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
           </Alert>
         )}
         <dl className="sg-summary">
-          <dt>Document</dt>
+          <dt>{t("Document")}</dt>
           <dd>
             {request.document_name}
             <span className="faint">
               {" "}
-              · {request.page_count} {request.page_count === 1 ? "page" : "pages"} · fingerprint <span className="mono" title={request.document_sha256 ?? ""}>{short(request.document_sha256)}</span>
+              · {request.page_count} {request.page_count === 1 ? "page" : "pages"} {t("· fingerprint")} <span className="mono" title={request.document_sha256 ?? ""}>{short(request.document_sha256)}</span>
             </span>
           </dd>
-          <dt>Title</dt>
-          <dd>{draft.title || <span className="faint">None</span>}</dd>
-          <dt>Last day</dt>
-          <dd>{draft.expires_on || <span className="faint">The workspace's usual time after sending</span>}</dd>
+          <dt>{t("Title")}</dt>
+          <dd>{draft.title || <span className="faint">{t("None")}</span>}</dd>
+          <dt>{t("Last day")}</dt>
+          <dd>{draft.expires_on || <span className="faint">{t("The workspace's usual time after sending")}</span>}</dd>
           {draft.message.trim() && (
             <>
-              <dt>Message</dt>
+              <dt>{t("Message")}</dt>
               <dd className="sg-pre">{draft.message}</dd>
             </>
           )}
         </dl>
-        <h3 className="sg-h3">Signers</h3>
+        <h3 className="sg-h3">{t("Signers")}</h3>
         <ol className="sg-sum-signers">
           {draft.signers.map((s) => (
             <li key={s.key}>
@@ -412,20 +412,19 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
 
       <section className="stack" aria-labelledby="next-head">
         <h2 id="next-head" className="sg-h2">
-          What happens next
+          {t("What happens next")}
         </h2>
         <ul className="sg-next">
           <li>{first.length ? `${names(first)} ${first.length > 1 ? "get" : "gets"} a personal link to sign${parallel ? "" : " first"}.` : "Nobody has been added yet."}</li>
-          {!parallel && groups.length > 1 && <li>The next {groups.length > 2 ? "people follow" : "person follows"} when the ones before have signed.</li>}
-          <li>If your workspace can't send email, you are given each link to pass on.</li>
-          <li>You see who has opened and signed, can send reminders, and download the sealed copy when everyone has signed.</li>
+          {!parallel && groups.length > 1 && <li>{t("The next")} {groups.length > 2 ? "people follow" : "person follows"} {t("when the ones before have signed.")}</li>}
+          <li>{t("If your workspace can't send email, you are given each link to pass on.")}</li>
+          <li>{t("You see who has opened and signed, can send reminders, and download the sealed copy when everyone has signed.")}</li>
         </ul>
         <Alert tone="info">
           <div className="sg-kind-note">
             <Info size={16} aria-hidden="true" />
             <div>
-              <strong>What kind of signature this is.</strong> Sign makes an electronic signature with an audit trail: it records who agreed, when and from which browser, and seals the PDF with a page that lists those steps and fingerprints. It does not add a PAdES, advanced or qualified
-              signature, and signers are identified by their personal link (and access code), not by an identity check. If you need a qualified signature, use a trust service provider.
+              <strong>{t("What kind of signature this is.")}</strong> {t("Sign makes an electronic signature with an audit trail: it records who agreed, when and from which browser, and seals the PDF with a page that lists those steps and fingerprints. It does not add a PAdES, advanced or qualified signature, and signers are identified by their personal link (and access code), not by an identity check. If you need a qualified signature, use a trust service provider.")}
             </div>
           </div>
         </Alert>

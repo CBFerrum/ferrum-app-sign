@@ -4,7 +4,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { Link, useParams } from "react-router";
-import { api, ApiError, docPath, download, errorMessage } from "@ferrum/client";
+import { api, ApiError, docPath, download, errorMessage, t } from "@ferrum/client";
 import { Alert, Button, ErrorState, PageLoading, toast, useShellTitle, useUnsavedGuard } from "@ferrum/kit";
 import { templateQuery } from "./data";
 import { Editor, useBoxes } from "./Editor";
@@ -40,7 +40,7 @@ function TemplateFields({ template }: { template: Template }) {
       ed.adopt(ids);
       base.current = saved;
       qc.setQueryData(templateQuery(template.id).queryKey, saved);
-      toast("Boxes saved");
+      toast(t("Boxes saved"));
     } catch (e) {
       setError(e instanceof ApiError && e.status === 409 ? "Someone else changed this template. Reload the page to see their version." : errorMessage(e));
     } finally {
@@ -51,22 +51,22 @@ function TemplateFields({ template }: { template: Template }) {
   return (
     <div className="sg-app sg-prepare">
       <div className="crumbs">
-        <Link to="/templates">Templates</Link>
+        <Link to="/templates">{t("Templates")}</Link>
       </div>
       <header className="sg-prep-head">
         <div>
           <h1 className="page-title">{template.template_name}</h1>
           <p className="page-sub">
-            Where each role signs, for every request made from this template ·{" "}
+            {t("Where each role signs, for every request made from this template ·")}{" "}
             <span aria-live="polite">{saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved"}</span>
           </p>
         </div>
         <div className="page-actions">
           <Link className="btn btn-md" to={`/e/SignTemplate/${template.id}`}>
-            Roles and details
+            {t("Roles and details")}
           </Link>
           <Button variant="primary" loading={saving} disabled={!dirty} onClick={() => void save()}>
-            Save boxes
+            {t("Save boxes")}
           </Button>
         </div>
       </header>

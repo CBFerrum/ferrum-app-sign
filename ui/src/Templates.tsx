@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { FileText, Plus } from "lucide-react";
-import { api, docPath, errorMessage, type FieldError } from "@ferrum/client";
+import { api, docPath, errorMessage, type FieldError, t as tr } from "@ferrum/client";
 import { Alert, Button, Dialog, EmptyState, ErrorState, Field, Spinner, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta } from "@ferrum/records";
 import { templateQuery, templatesQuery } from "./data";
@@ -21,7 +21,7 @@ export function UseTemplate({ id, onClose }: { id: string; onClose: () => void }
   const t = q.data;
   return (
     <Dialog open onClose={onClose} title={t ? `Use “${t.template_name}”` : "Use a template"} wide>
-      {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : !t ? <Spinner label="Opening the template" /> : <Form key={t.id} template={t} onClose={onClose} onMade={(rid) => navigate(`/request/${rid}/prepare/review`)} />}
+      {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : !t ? <Spinner label={tr("Opening the template")} /> : <Form key={t.id} template={t} onClose={onClose} onMade={(rid) => navigate(`/request/${rid}/prepare/review`)} />}
     </Dialog>
   );
 }
@@ -56,40 +56,40 @@ function Form({ template: t, onClose, onMade }: { template: Template; onClose: (
   return (
     <form className="stack" onSubmit={submit}>
       <p className="muted">
-        Say who signs this time. The document and where each person signs come from the template; you can still change them before sending.
+        {tr("Say who signs this time. The document and where each person signs come from the template; you can still change them before sending.")}
       </p>
       {error && <Alert tone="error">{error}</Alert>}
       {who.map((p, i) => (
         <fieldset key={p.role} className="sg-person">
           <legend>{p.role}</legend>
           <div className="form-grid">
-            <Field label="Name" htmlFor={`u-name-${i}`} required error={problem(i, "name")}>
+            <Field label={tr("Name")} htmlFor={`u-name-${i}`} required error={problem(i, "name")}>
               <input id={`u-name-${i}`} className="input" value={p.name} onChange={(e) => set(i, { name: e.target.value })} autoComplete="off" />
             </Field>
-            <Field label="Email" htmlFor={`u-email-${i}`} required error={problem(i, "email")}>
+            <Field label={tr("Email")} htmlFor={`u-email-${i}`} required error={problem(i, "email")}>
               <input id={`u-email-${i}`} className="input" type="email" value={p.email} onChange={(e) => set(i, { email: e.target.value })} autoComplete="off" />
             </Field>
-            <Field label="Access code" htmlFor={`u-code-${i}`} hint="Optional. Tell them separately; it is never emailed." error={problem(i, "access_code")}>
+            <Field label={tr("Access code")} htmlFor={`u-code-${i}`} hint={tr("Optional. Tell them separately; it is never emailed.")} error={problem(i, "access_code")}>
               <input id={`u-code-${i}`} className="input" value={p.code} onChange={(e) => set(i, { code: e.target.value })} autoComplete="off" />
             </Field>
           </div>
         </fieldset>
       ))}
       <div className="form-grid">
-        <Field label="Title" htmlFor="u-title" required>
+        <Field label={tr("Title")} htmlFor="u-title" required>
           <input id="u-title" className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
         </Field>
-        <Field label="Last day to sign" htmlFor="u-expires" hint="Leave empty for the workspace's usual time.">
+        <Field label={tr("Last day to sign")} htmlFor="u-expires" hint={tr("Leave empty for the workspace's usual time.")}>
           <input id="u-expires" className="input" type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
         </Field>
-        <Field label="Message to the signers" htmlFor="u-message" className="span-all">
+        <Field label={tr("Message to the signers")} htmlFor="u-message" className="span-all">
           <textarea id="u-message" className="textarea" rows={3} maxLength={5000} value={message} onChange={(e) => setMessage(e.target.value)} />
         </Field>
       </div>
       <div className="row" style={{ justifyContent: "flex-end" }}>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{tr("Cancel")}</Button>
         <Button type="submit" variant="primary" loading={busy} disabled={!ready}>
-          Make the draft
+          {tr("Make the draft")}
         </Button>
       </div>
     </form>
@@ -104,16 +104,16 @@ export function TemplateCards({ limit }: { limit?: number }) {
   const [using, setUsing] = useState<string | null>(null);
   const list = (q.data ?? []).slice(0, limit);
   if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
-  if (!q.data) return <Spinner label="Loading the templates" />;
+  if (!q.data) return <Spinner label={tr("Loading the templates")} />;
   if (!list.length)
     return (
-      <EmptyState title="No templates yet" icon="file">
+      <EmptyState title={tr("No templates yet")} icon="file">
         <p className="muted" style={{ maxWidth: "32rem" }}>
-          A template is a PDF you send again and again, with its signers' roles and boxes placed once, such as a standard agreement.
+          {tr("A template is a PDF you send again and again, with its signers' roles and boxes placed once, such as a standard agreement.")}
         </p>
         {writable && (
           <Link className="btn btn-md" to="/e/SignTemplate/new">
-            <Plus size={15} aria-hidden="true" /> New template
+            <Plus size={15} aria-hidden="true" /> {tr("New template")}
           </Link>
         )}
       </EmptyState>
@@ -134,16 +134,16 @@ export function TemplateCards({ limit }: { limit?: number }) {
             </div>
             <div className="sg-card-actions">
               <Button variant="primary" size="sm" onClick={() => setUsing(t.id)}>
-                Use
+                {tr("Use")}
               </Button>
               {writable && (
                 <Link className="btn btn-sm" to={`/template/${t.id}/fields`}>
-                  Place boxes
+                  {tr("Place boxes")}
                 </Link>
               )}
               {writable && (
                 <Link className="btn btn-sm btn-ghost" to={`/e/SignTemplate/${t.id}`}>
-                  Details
+                  {tr("Details")}
                 </Link>
               )}
             </div>
@@ -164,12 +164,12 @@ export function Templates() {
       <header className="sg-head">
         <div>
           <Nav />
-          <p className="page-sub">Documents you send again and again, with their signers and boxes ready.</p>
+          <p className="page-sub">{tr("Documents you send again and again, with their signers and boxes ready.")}</p>
         </div>
         {writable && (
           <div className="sg-tools">
             <Link className="btn btn-md" to="/e/SignTemplate/new">
-              <Plus size={15} aria-hidden="true" /> New template
+              <Plus size={15} aria-hidden="true" /> {tr("New template")}
             </Link>
           </div>
         )}

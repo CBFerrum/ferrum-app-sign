@@ -12,6 +12,7 @@ import { addBox, arrow, type Box, colourOf, commit, copyOf, describe, fit, grow,
 import { PdfPage, usePdf } from "./PdfPage";
 import { boxStyle, Sheet } from "./Sheet";
 import type { FieldType } from "./signing";
+import { t } from "@ferrum/client";
 
 // ───────────────────────── the boxes, with undo ─────────────────────────
 
@@ -231,40 +232,40 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
   };
 
   if (!pages.length)
-    return <Alert tone="error">The pages of this document couldn't be read, so boxes can't be placed. Go back and check that the PDF opens.</Alert>;
+    return <Alert tone="error">{t("The pages of this document couldn't be read, so boxes can't be placed. Go back and check that the PDF opens.")}</Alert>;
   if (!roles.length)
     return (
       <Alert tone="warning">
-        There is nobody to place boxes for yet. Add the people who sign first; each gets a colour, and their boxes are placed here.
+        {t("There is nobody to place boxes for yet. Add the people who sign first; each gets a colour, and their boxes are placed here.")}
       </Alert>
     );
 
   return (
     <div className="sg-editor" ref={root} onKeyDown={onKey} style={{ "--zoom": zoom } as CSSProperties}>
-      <div className="sg-edit-bar" role="toolbar" aria-label="Page tools">
-        <Button size="sm" onClick={() => (say("Undone."), ed.undo())} disabled={!ed.canUndo} aria-label="Undo">
-          <Undo2 size={15} aria-hidden="true" /> Undo
+      <div className="sg-edit-bar" role="toolbar" aria-label={t("Page tools")}>
+        <Button size="sm" onClick={() => (say("Undone."), ed.undo())} disabled={!ed.canUndo} aria-label={t("Undo")}>
+          <Undo2 size={15} aria-hidden="true" /> {t("Undo")}
         </Button>
-        <Button size="sm" onClick={() => (say("Redone."), ed.redo())} disabled={!ed.canRedo} aria-label="Redo">
-          <Redo2 size={15} aria-hidden="true" /> Redo
+        <Button size="sm" onClick={() => (say("Redone."), ed.redo())} disabled={!ed.canRedo} aria-label={t("Redo")}>
+          <Redo2 size={15} aria-hidden="true" /> {t("Redo")}
         </Button>
         <span className="sg-edit-sep" />
-        <Button size="sm" aria-label="Zoom out" disabled={zoom === ZOOMS[0]} onClick={() => setZoom(ZOOMS[Math.max(0, ZOOMS.indexOf(zoom) - 1)])}>
+        <Button size="sm" aria-label={t("Zoom out")} disabled={zoom === ZOOMS[0]} onClick={() => setZoom(ZOOMS[Math.max(0, ZOOMS.indexOf(zoom) - 1)])}>
           <ZoomOut size={15} aria-hidden="true" />
         </Button>
         <span className="faint" aria-live="polite" style={{ minWidth: "3ch", textAlign: "center" }}>
           {Math.round(zoom * 100)}%
         </span>
-        <Button size="sm" aria-label="Zoom in" disabled={zoom === ZOOMS[ZOOMS.length - 1]} onClick={() => setZoom(ZOOMS[Math.min(ZOOMS.length - 1, ZOOMS.indexOf(zoom) + 1)])}>
+        <Button size="sm" aria-label={t("Zoom in")} disabled={zoom === ZOOMS[ZOOMS.length - 1]} onClick={() => setZoom(ZOOMS[Math.min(ZOOMS.length - 1, ZOOMS.indexOf(zoom) + 1)])}>
           <ZoomIn size={15} aria-hidden="true" />
         </Button>
         <span className="sg-edit-sep" />
         <label className="sg-goto">
-          <span className="faint">Go to page</span>
+          <span className="faint">{t("Go to page")}</span>
           <select
             className="select"
             value=""
-            aria-label="Go to page"
+            aria-label={t("Go to page")}
             onChange={(e) => {
               document.getElementById(`page-${e.target.value}`)?.scrollIntoView({ block: "start" });
               e.target.value = "";
@@ -275,7 +276,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
             </option>
             {pages.map((_, i) => (
               <option key={i} value={i + 1}>
-                Page {i + 1}
+                {t("Page")} {i + 1}
                 {boxes.some((b) => b.page === i + 1) ? ` (${boxes.filter((b) => b.page === i + 1).length})` : ""}
               </option>
             ))}
@@ -284,14 +285,14 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
         <span className="spacer" />
         {onPdf && (
           <Button size="sm" onClick={onPdf}>
-            Download the PDF
+            {t("Download the PDF")}
           </Button>
         )}
       </div>
 
       <div className="sg-edit-body">
         <div className={pages.length > 40 ? "sg-stage sg-lazy" : "sg-stage"}>
-          {!pdf && <p className="sg-note">The sheets are the size of your pages, not pictures of them. Keep the PDF open beside this screen to see where things go on each page.</p>}
+          {!pdf && <p className="sg-note">{t("The sheets are the size of your pages, not pictures of them. Keep the PDF open beside this screen to see where things go on each page.")}</p>}
           {pages.map((size, i) => {
             const n = i + 1;
             const here = boxes.filter((b) => b.page === n);
@@ -338,9 +339,9 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
           })}
         </div>
 
-        <aside className="sg-edit-side" aria-label="Boxes">
+        <aside className="sg-edit-side" aria-label={t("Boxes")}>
           <section className="sg-side-block" aria-labelledby="ed-who">
-            <h3 id="ed-who">Who signs here?</h3>
+            <h3 id="ed-who">{t("Who signs here?")}</h3>
             <ul className="sg-who">
               {roles.map((r) => {
                 const count = boxes.filter((b) => b.role.trim().toLowerCase() === r.role.trim().toLowerCase()).length;
@@ -355,9 +356,9 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
                       </span>
                       <span className="faint">{count}</span>
                       {lacks && (
-                        <span className="sg-lacks" title="Needs a required Signature box before the request can be sent">
+                        <span className="sg-lacks" title={t("Needs a required Signature box before the request can be sent")}>
                           <TriangleAlert size={14} aria-hidden="true" />
-                          <span className="sr-only">has no signature box yet</span>
+                          <span className="sr-only">{t("has no signature box yet")}</span>
                         </span>
                       )}
                     </button>
@@ -368,7 +369,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
           </section>
 
           <section className="sg-side-block" aria-labelledby="ed-add">
-            <h3 id="ed-add">Add a box</h3>
+            <h3 id="ed-add">{t("Add a box")}</h3>
             <div className={`sg-palette sg-c${colourOf(role, names)}`}>
               {KINDS.map((k) => (
                 <button
@@ -386,7 +387,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
               ))}
             </div>
             <p className="faint" style={{ fontSize: 12.5 }}>
-              Click to add one to the page in view, or drag it onto a page. For {roles.find((r) => r.role === role)?.label ?? role}.
+              {t("Click to add one to the page in view, or drag it onto a page. For")} {roles.find((r) => r.role === role)?.label ?? role}.
             </p>
           </section>
 
@@ -404,9 +405,9 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
             />
           ) : (
             <section className="sg-side-block">
-              <h3>Keyboard</h3>
+              <h3>{t("Keyboard")}</h3>
               <p className="faint" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                Tab to a box. Arrow keys move it a point (Shift: ten); Alt with the arrows changes its size. Delete removes it, Ctrl or ⌘ with D copies it in place, C and V copy and paste, Z undoes.
+                {t("Tab to a box. Arrow keys move it a point (Shift: ten); Alt with the arrows changes its size. Delete removes it, Ctrl or ⌘ with D copies it in place, C and V copy and paste, Z undoes.")}
               </p>
             </section>
           )}
@@ -459,9 +460,9 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
   const num = (field: keyof Rect, label: string, max: number) => <Num key={field} id={`ins-${field}`} label={label} value={whole(b[field])} max={Math.round(max)} onValue={(v) => set(field, v)} />;
   return (
     <section className="sg-side-block sg-inspector" aria-labelledby="ins-head">
-      <h3 id="ins-head">This box</h3>
+      <h3 id="ins-head">{t("This box")}</h3>
       <div className="stack" style={{ gap: 10 }}>
-        <Field label="For" htmlFor="ins-role">
+        <Field label={t("For")} htmlFor="ins-role">
           <select id="ins-role" className="select" value={b.role} onChange={(e) => onChange({ role: e.target.value })}>
             {roles.map((r) => (
               <option key={r.role} value={r.role}>
@@ -470,7 +471,7 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
             ))}
           </select>
         </Field>
-        <Field label="Kind" htmlFor="ins-kind">
+        <Field label={t("Kind")} htmlFor="ins-kind">
           <select id="ins-kind" className="select" value={b.field_type} onChange={(e) => onChange({ field_type: e.target.value as FieldType })}>
             {KINDS.map((k) => (
               <option key={k.type} value={k.type}>
@@ -480,18 +481,18 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
           </select>
         </Field>
         {!auto && (
-          <Field label="Label" htmlFor="ins-label" hint="What the signer sees, such as “Company name”.">
+          <Field label={t("Label")} htmlFor="ins-label" hint={t("What the signer sees, such as “Company name”.")}>
             <input id="ins-label" className="input" value={b.label} maxLength={100} onChange={(e) => onChange({ label: e.target.value })} />
           </Field>
         )}
         {!auto && (
           <label className="check-field">
             <input type="checkbox" checked={b.required} onChange={(e) => onChange({ required: e.target.checked })} />
-            <span>Required</span>
+            <span>{t("Required")}</span>
           </label>
         )}
         <div className="form-grid" style={{ "--cols": 2, gap: "8px 12px" } as CSSProperties}>
-          <Field label="Page" htmlFor="ins-page">
+          <Field label={t("Page")} htmlFor="ins-page">
             <input
               id="ins-page"
               className="input num"
@@ -512,23 +513,23 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
           {num("height", "Height", size.height)}
         </div>
         <p className="faint" style={{ fontSize: 12 }}>
-          In points (72 to the inch) from the top left of page {b.page}.
+          {t("In points (72 to the inch) from the top left of page {page}.", { page: b.page })}
         </p>
         <div className="row">
           <Button size="sm" onClick={onDuplicate}>
-            <Copy size={14} aria-hidden="true" /> Copy
+            <Copy size={14} aria-hidden="true" /> {t("Copy")}
           </Button>
           {onEveryPage && (
-            <Button size="sm" title="Puts the same box in the same place on every other page" onClick={onEveryPage}>
-              On every page
+            <Button size="sm" title={t("Puts the same box in the same place on every other page")} onClick={onEveryPage}>
+              {t("On every page")}
             </Button>
           )}
           <Button size="sm" variant="danger" onClick={onRemove}>
-            <Trash size={14} aria-hidden="true" /> Delete
+            <Trash size={14} aria-hidden="true" /> {t("Delete")}
           </Button>
           <span className="spacer" />
           <Button size="sm" onClick={onDone}>
-            Done
+            {t("Done")}
           </Button>
         </div>
       </div>

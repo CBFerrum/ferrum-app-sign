@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { Button, Tabs } from "@ferrum/kit";
 import { exportFrame, hasInk, inkBounds, type Pt } from "./ink";
 import type { Mark } from "./signing";
+import { t as tr } from "@ferrum/client";
 
 /** The pen's width in CSS pixels, the margin kept round the ink and the widest picture sent. */
 const PEN = 2.6;
@@ -129,7 +130,7 @@ function Drawing({ height, hint, onChange }: { height: string; hint: string; onC
       <div className="sg-paper sg-canvas" style={{ height }}>
         <canvas
           ref={canvas}
-          aria-label="Drawing area for your signature. To type it instead, use the Type tab."
+          aria-label={tr("Drawing area for your signature. To type it instead, use the Type tab.")}
           onPointerDown={down}
           onPointerMove={move}
           onPointerUp={up}
@@ -139,13 +140,13 @@ function Drawing({ height, hint, onChange }: { height: string; hint: string; onC
       </div>
       <div className="row">
         <Button size="sm" onClick={undo} disabled={drawn === 0}>
-          Undo
+          {tr("Undo")}
         </Button>
         <Button size="sm" onClick={clear} disabled={drawn === 0}>
-          Clear
+          {tr("Clear")}
         </Button>
         <span className="faint" style={{ fontSize: 12.5 }}>
-          Use your finger, a pen or the mouse.
+          {tr("Use your finger, a pen or the mouse.")}
         </span>
       </div>
     </div>
@@ -185,14 +186,14 @@ export function MarkPad({ kind, typed: start, onChange }: { kind: "signature" | 
       <div role="tabpanel" id="mark-panel-type" aria-labelledby="mark-tab-type" hidden={mode !== "type"}>
         <div className="stack" style={{ gap: 8 }}>
           <label className="field-label" htmlFor="mark-text">
-            Type your {kind === "signature" ? "full name" : "initials"}
+            {tr("Type your")} {kind === "signature" ? "full name" : "initials"}
           </label>
           <input id="mark-text" className="input" value={text} maxLength={kind === "signature" ? 100 : 10} autoComplete="off" onChange={(e) => setText(e.target.value)} />
           <div className="sg-paper sg-typed" aria-hidden="true">
-            {text.trim() || <span className="sg-canvas-hint">Your {what} appears here</span>}
+            {text.trim() || <span className="sg-canvas-hint">{tr("Your {what} appears here", { what })}</span>}
           </div>
           <p className="faint" style={{ fontSize: 12.5 }}>
-            A typed {what} is stamped on the document in italic type, as shown.
+            {tr("A typed {what} is stamped on the document in italic type, as shown.", { what })}
           </p>
         </div>
       </div>

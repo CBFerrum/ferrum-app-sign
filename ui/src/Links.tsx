@@ -6,6 +6,7 @@ import { Check, Copy } from "lucide-react";
 import { Badge, Button, Dialog, toast } from "@ferrum/kit";
 import { copyText } from "./clipboard";
 import { absolute, type LinkRow } from "./model";
+import { t } from "@ferrum/client";
 
 function Row({ link }: { link: LinkRow }) {
   const [done, setDone] = useState(false);
@@ -17,7 +18,7 @@ function Row({ link }: { link: LinkRow }) {
         <span className="faint">{link.email}</span>
       </div>
       {link.emailed ? (
-        <Badge tone="green">Emailed</Badge>
+        <Badge tone="green">{t("Emailed")}</Badge>
       ) : (
         <div className="sg-link-url">
           <input className="input mono" readOnly value={url} aria-label={`Signing link for ${link.name || link.role}`} onFocus={(e) => e.currentTarget.select()} />
@@ -25,9 +26,9 @@ function Row({ link }: { link: LinkRow }) {
             onClick={async () => {
               if (await copyText(url)) {
                 setDone(true);
-                toast("Link copied");
+                toast(t("Link copied"));
                 setTimeout(() => setDone(false), 2500);
-              } else toast("Select the link and copy it by hand", "error");
+              } else toast(t("Select the link and copy it by hand"), "error");
             }}
           >
             {done ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
@@ -43,7 +44,7 @@ function Row({ link }: { link: LinkRow }) {
 export function LinksDialog({ open, title, links, onClose }: { open: boolean; title: string; links: LinkRow[]; onClose: () => void }) {
   const manual = links.some((l) => !l.emailed);
   return (
-    <Dialog open={open} onClose={onClose} title={title} wide footer={<Button variant="primary" onClick={onClose}>Done</Button>}>
+    <Dialog open={open} onClose={onClose} title={title} wide footer={<Button variant="primary" onClick={onClose}>{t("Done")}</Button>}>
       <div className="stack" style={{ gap: 12 }}>
         <p className="muted">
           {manual
