@@ -1,6 +1,6 @@
 id: sign
 name: Sign
-version: 0.2.13
+version: 0.2.14
 publisher: cbferrum
 summary: "Electronic signatures: send PDFs for signing in order, place fields, sign by secure link, sealed PDFs with an audit trail and certificate"
 description: README.md
@@ -35,3 +35,15 @@ contributes:
   # What a signer opens from their link: /sign/s/{workspace}/{token}, with no sign-in.
   shell.public:
     - {id: sign, path: sign/s, title: Sign a document}
+  # What the assistant should know in Sign's pages, and what it suggests asking there.
+  shell.assistant:
+    - id: sign
+      title: "Sign"
+      instructions: >-
+        A SignRequest sends a PDF for signing: Draft, Sent, In Progress, Completed, Declined, Expired or Voided. Each
+        signer (SignRequestSigner) is Waiting until their turn, then Sent, Viewed, Signed or Declined, in order.
+        SignEvent is the audit trail, and a completed request has a sealed PDF with its certificate.
+      suggestions:
+        - "Which documents wait for signatures?"
+        - "Who has not signed yet?"
+        - "Which requests were declined this month?"
