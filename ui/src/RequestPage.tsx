@@ -7,7 +7,7 @@ import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router";
 import { Ban, Bell, Check, Clock, Copy, Download, Ellipsis, Eye, Hash, Info, Mail, PenLine, X } from "lucide-react";
 import { api, ApiError, docPath, download, errorMessage, relativeTime, shell, t as tr, isolate } from "@ferrum/client";
-import { Alert, Badge, Button, Dialog, ErrorState, Field, PageLoading, Spinner, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
+import { Alert, Badge, Button, Dialog, ErrorState, Field, PageLoading, Spinner, toast, useLiveEntity, useShellTitle, placed } from "@ferrum/kit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@ferrum/kit/primitives";
 import { copyText } from "./clipboard";
 import { act, eventsQuery, refresh, requestQuery } from "./data";
@@ -74,8 +74,8 @@ export function RequestView({ request: r }: { request: SignRequest }) {
     if (list.some((l) => !l.emailed)) setLinks({ title, list });
     else toast(`${title}: ${list.map((l) => l.name || l.email).join(", ")}`);
   };
-  const remind = () => run("remind", async () => handBack("Reminder sent", (await act<{ reminded: LinkRow[] }>(r.id, "remind")).reminded));
-  const again = (signer?: Signer) => run("resend", async () => handBack("Link sent again", (await act<{ resent: LinkRow[] }>(r.id, "resend", signer ? { signer: signer.id } : {})).resent));
+  const remind = () => run("remind", async () => handBack(tr("Reminder sent"), (await act<{ reminded: LinkRow[] }>(r.id, "remind")).reminded));
+  const again = (signer?: Signer) => run("resend", async () => handBack(tr("Link sent again"), (await act<{ resent: LinkRow[] }>(r.id, "resend", signer ? { signer: signer.id } : {})).resent));
   const check = () => run("verify", async () => setVerify({ at: Date.now(), result: await act<Verify>(r.id, "verify") }));
   const get = (path: string | null | undefined, name: string) => run("download", () => download(path ?? "", name));
 
@@ -131,12 +131,12 @@ export function RequestView({ request: r }: { request: SignRequest }) {
       {header}
       {r.status === "Completed" && (
         <Alert tone="success">
-          {tr("Everyone signed")}{r.completed_at ? tr(" on {value}", { value: when(r.completed_at) }) : ""}{tr(". The signed copy carries an audit page listing each step and the fingerprints below.")}
+          {placed(tr("Everyone signed{p1}. The signed copy carries an audit page listing each step and the fingerprints below."), { p1: r.completed_at ? tr(" on {value}", { value: when(r.completed_at) }) : "" })}
         </Alert>
       )}
       {open && everyoneSigned && (
         <Alert tone="warning">
-          {tr("Everyone has signed. The sealed copy is being prepared")}{r.seal_error ? tr(", and the last try failed: {seal_error}", { seal_error: r.seal_error }) : ""}{tr(". This is retried every minute; there is nothing to do.")}
+          {placed(tr("Everyone has signed. The sealed copy is being prepared{p1}. This is retried every minute; there is nothing to do."), { p1: r.seal_error ? tr(", and the last try failed: {seal_error}", { seal_error: r.seal_error }) : "" })}
         </Alert>
       )}
       {r.status === "Declined" && declined && (
@@ -144,8 +144,8 @@ export function RequestView({ request: r }: { request: SignRequest }) {
           <strong>{declined.name || declined.role} {tr("declined.")}</strong> {declined.decline_reason ? `“${declined.decline_reason}”` : ""} {tr("The request is closed for everyone.")}
         </Alert>
       )}
-      {r.status === "Voided" && <Alert tone="info">{tr("You withdrew this request")}{r.void_reason ? `: “${r.void_reason}”` : ""}{tr(". Its links no longer work.")}</Alert>}
-      {r.status === "Expired" && <Alert tone="warning">{tr("The last day to sign passed on")} {isolate(when(r.expires_at))}{tr(". The links no longer work.")}</Alert>}
+      {r.status === "Voided" && <Alert tone="info">{placed(tr("You withdrew this request{p1}. Its links no longer work."), { p1: r.void_reason ? `: “${r.void_reason}”` : "" })}</Alert>}
+      {r.status === "Expired" && <Alert tone="warning">{placed(tr("The last day to sign passed on {p1}. The links no longer work."), { p1: isolate(when(r.expires_at)) })}</Alert>}
 
       <div className="sg-req-body">
         <div className="sg-req-main">
@@ -258,10 +258,10 @@ export function RequestView({ request: r }: { request: SignRequest }) {
       <Dialog open={about} onClose={() => setAbout(false)} title={tr("What kind of signature this is")} footer={<Button variant="primary" onClick={() => setAbout(false)}>{tr("Got it")}</Button>}>
         <div className="stack sg-about" style={{ gap: 10 }}>
           <p>
-            {tr("Sign makes an")} <strong>{tr("electronic signature with an audit trail")}</strong>{tr(". Each signer's agreement is recorded with the time and their browser, the finished PDF is sealed with a page listing the steps, and the fingerprints (SHA-256) of the files and a chain of the trail's entries let anyone see whether something changed afterwards.")}
+            {placed(tr("Sign makes an {p1}. Each signer's agreement is recorded with the time and their browser, the finished PDF is sealed with a page listing the steps, and the fingerprints (SHA-256) of the files and a chain of the trail's entries let anyone see whether something changed afterwards."), { p1: <strong>{tr("electronic signature with an audit trail")}</strong> })}
           </p>
           <p>
-            {tr("It is")} <strong>{tr("not")}</strong> {tr("a PAdES signature, and not an advanced or qualified electronic signature: the PDF carries no certificate that a PDF reader can validate, and signers are identified by their personal link and access code, not by an identity check. \"Check integrity\" compares fingerprints; it is not a certificate check.")}
+            {placed(tr("It is {p1} a PAdES signature, and not an advanced or qualified electronic signature: the PDF carries no certificate that a PDF reader can validate, and signers are identified by their personal link and access code, not by an identity check. \"Check integrity\" compares fingerprints; it is not a certificate check."), { p1: <strong>{tr("not")}</strong> })}
           </p>
           <p>{tr("If a law or the other party requires a qualified signature, use a trust service provider instead.")}</p>
         </div>
@@ -351,8 +351,7 @@ function Trail({ events, error, onRetry }: { events: SignEvent[] | undefined; er
               </div>
               {t.detail && <p className="sg-trail-detail">{isolate(t.detail)}</p>}
               <div className="faint sg-trail-meta">
-                {tr("No. {seq}", { seq: e.seq })}
-                {e.actor && e.actor !== "system" && e.actor !== e.signer_email ? tr(" · by {actor}", { actor: e.actor }) : e.actor === "system" ? tr(" · automatic") : ""}
+                {(e.actor && e.actor !== "system" && e.actor !== e.signer_email ? tr("No. {seq} · by {actor}", { seq: e.seq, actor: e.actor }) : (e.actor === "system" ? tr("No. {seq} · automatic", { seq: e.seq }) : tr("No. {seq}", { seq: e.seq })))}
               </div>
             </div>
           </li>
@@ -447,7 +446,7 @@ function VoidDialog({ request: r, onClose }: { request: SignRequest; onClose: ()
     >
       <form id="void-form" className="stack" onSubmit={submit}>
         <p>
-          {tr("Nobody can sign it afterwards, and anyone who already has a link is told if the workspace sends email.")} {r.signers.some((s) => s.status === "Signed") ? tr("What has been signed so far stays in the trail.") : ""} {tr("You can't undo this.")}
+          {placed(tr("Nobody can sign it afterwards, and anyone who already has a link is told if the workspace sends email. {p1} You can't undo this."), { p1: r.signers.some((s) => s.status === "Signed") ? tr("What has been signed so far stays in the trail.") : "" })}
         </p>
         {error && <Alert tone="error">{isolate(error)}</Alert>}
         <Field label={tr("Reason")} htmlFor="void-reason" hint={tr("Optional. It is kept in the trail.")}>
@@ -477,7 +476,7 @@ function CorrectDialog({ request: r, signer, onClose }: { request: SignRequest; 
       toast(email.trim() !== (signer.email ?? "") ? tr("Corrected. The old link no longer works.") : tr("Corrected"));
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 409 ? "This request was changed meanwhile. Close this and try again." : errorMessage(err, false));
+      setError(err instanceof ApiError && err.status === 409 ? tr("This request was changed meanwhile. Close this and try again.") : errorMessage(err, false));
       setBusy(false);
     }
   };

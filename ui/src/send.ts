@@ -77,7 +77,7 @@ export const changed = (a: Draft, b: Draft) =>
 /** "Signer 3": the first name for a role that nobody has. */
 export function nextRole(signers: SignerDraft[]): string {
   const taken = new Set(signers.map((s) => s.role.trim().toLowerCase()));
-  for (let n = signers.length + 1; ; n++) if (!taken.has(`signer ${n}`)) return tr("Signer {n}", { n });
+  for (let n = signers.length + 1; ; n++) if (!taken.has(tr("signer {n}", { n }))) return tr("Signer {n}", { n });
 }
 
 export function addSigner(d: Draft): Draft {
@@ -135,8 +135,8 @@ export interface Problem {
 /** What stops a request going out, in words. `today` is the workspace's date. */
 export function sendProblems(d: Draft, today: string): Problem[] {
   const out: Problem[] = [];
-  if (!d.title.trim()) out.push({ step: "details", text: "Give the request a title." });
-  if (!d.signers.length) out.push({ step: "signers", text: "Add at least one person to sign." });
+  if (!d.title.trim()) out.push({ step: "details", text: tr("Give the request a title.") });
+  if (!d.signers.length) out.push({ step: "signers", text: tr("Add at least one person to sign.") });
   const seen = new Set<string>();
   d.signers.forEach((s, i) => {
     const who = s.name.trim() || s.role.trim() || tr("Signer {value}", { value: i + 1 });
@@ -152,14 +152,14 @@ export function sendProblems(d: Draft, today: string): Problem[] {
     const s = d.signers.find((x) => x.role === role);
     out.push({ step: "fields", signer: s?.key, text: tr("{value} has no signature box. Place a required Signature box for them.", { value: s?.name.trim() || role }) });
   }
-  if (d.expires_on && d.expires_on < today) out.push({ step: "details", text: "The deadline is in the past." });
+  if (d.expires_on && d.expires_on < today) out.push({ step: "details", text: tr("The deadline is in the past.") });
   return out;
 }
 
 /** The boxes of each signer, counted by kind, for the review. */
 export function boxCounts(boxes: Box[], role: string): string {
   const mine = boxes.filter((b) => b.role.trim().toLowerCase() === role.trim().toLowerCase());
-  if (!mine.length) return "no boxes";
+  if (!mine.length) return tr("no boxes");
   const n = (t: Box["field_type"]) => mine.filter((b) => b.field_type === t).length;
   const parts = [
     [n("Signature"), "signature"],
@@ -214,8 +214,8 @@ export function sizeText(bytes: number): string {
 
 /** Why a file cannot be sent, before it goes anywhere. */
 export function refusal(f: { name: string; type: string; size: number }): string | null {
-  if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") return "Only PDF files can be signed here.";
+  if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") return tr("Only PDF files can be signed here.");
   if (f.size > MAX_MB * 1024 * 1024) return tr("That file is larger than {MAX_MB} MB.", { MAX_MB });
-  if (f.size === 0) return "That file is empty.";
+  if (f.size === 0) return tr("That file is empty.");
   return null;
 }

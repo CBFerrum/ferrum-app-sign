@@ -48,7 +48,7 @@ export function standing(r: Pick<SignRequest, "status" | "signing_mode" | "signe
   let text: string;
   switch (r.status) {
     case "Draft":
-      text = "Not sent yet";
+      text = tr("Not sent yet");
       break;
     case "Completed":
       text = total === 1 ? "Signed" : tr("Signed by all {total}", { total });
@@ -59,7 +59,7 @@ export function standing(r: Pick<SignRequest, "status" | "signing_mode" | "signe
       break;
     }
     case "Voided":
-      text = "Withdrawn by the sender";
+      text = tr("Withdrawn by the sender");
       break;
     case "Expired":
       text = tr("Expired with {signed} of {total} signed", { signed, total });
@@ -84,7 +84,7 @@ export function signerLine(s: Signer, when: (iso: string | null | undefined) => 
     case "Sent":
       return tr("Link sent {value}, not opened yet", { value: when(s.sent_at) });
     default:
-      return "Waiting for their turn";
+      return tr("Waiting for their turn");
   }
 }
 
@@ -114,7 +114,7 @@ export interface Told {
 
 /** One event of the trail in words. */
 export function told(e: SignEvent): Told {
-  const name = e.signer_name?.trim() || e.signer_email?.trim() || e.role?.trim() || "the signer";
+  const name = e.signer_name?.trim() || e.signer_email?.trim() || e.role?.trim() || tr("the signer");
   const detail = e.details?.trim() ?? "";
   switch (e.event) {
     case "Sent":
@@ -169,7 +169,7 @@ export function checks(v: Verify): Check[] {
     {
       label: tr("The original document"),
       ok: v.original.ok,
-      detail: v.original.ok ? "Stored unchanged: it still has the fingerprint recorded when it was sent." : (v.original.error ?? "It no longer matches the fingerprint recorded when it was sent."),
+      detail: v.original.ok ? tr("Stored unchanged: it still has the fingerprint recorded when it was sent.") : (v.original.error ?? tr("It no longer matches the fingerprint recorded when it was sent.")),
       recorded: v.original.expected ?? undefined,
       found: v.original.sha256,
     },
@@ -179,8 +179,8 @@ export function checks(v: Verify): Check[] {
       label: tr("The signed copy"),
       ok: v.sealed.ok,
       detail: v.sealed.ok
-        ? "Stored unchanged, and it opens as a PDF."
-        : (v.sealed.error ?? (v.sealed.readable === false ? "It can't be read as a PDF." : "It no longer matches the fingerprint recorded when it was sealed.")),
+        ? tr("Stored unchanged, and it opens as a PDF.")
+        : (v.sealed.error ?? (v.sealed.readable === false ? tr("It can't be read as a PDF.") : tr("It no longer matches the fingerprint recorded when it was sealed."))),
       recorded: v.sealed.expected ?? undefined,
       found: v.sealed.sha256,
     });
@@ -188,7 +188,7 @@ export function checks(v: Verify): Check[] {
   out.push({
     label: tr("The audit trail"),
     ok: v.audit_trail.ok,
-    detail: v.audit_trail.ok ? tr("{value}, each tied to the one before it.", { value: String((v.audit_trail.events === 1 ? tr("1 event") : tr("{n} events", { n: v.audit_trail.events }))) }) : (v.audit_trail.problem ?? "The trail doesn't add up."),
+    detail: v.audit_trail.ok ? tr("{value}, each tied to the one before it.", { value: String((v.audit_trail.events === 1 ? tr("1 event") : tr("{n} events", { n: v.audit_trail.events }))) }) : (v.audit_trail.problem ?? tr("The trail doesn't add up.")),
   });
   return out;
 }

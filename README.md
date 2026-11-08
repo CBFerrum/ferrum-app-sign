@@ -267,6 +267,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.2.16** | Its names in Arabic and Hindi; the last English sentences translated. |
 | **0.2.15** | Sentences built in code are words too, in Arabic and Hindi. |
 | **0.2.14** | The assistant knows its records. |
 | **0.2.13** | Rebuilt with Ferrum-Frontend 5b22e7b: its own words in Arabic and Hindi. |

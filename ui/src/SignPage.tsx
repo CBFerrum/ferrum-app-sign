@@ -8,7 +8,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Ban, Check, CircleAlert, Clock, Copy, Download, Ellipsis, FileText, Info, Link2Off, PenLine, Signature } from "lucide-react";
 import { bootstrap, saveBlob, t as tr, isolate } from "@ferrum/client";
-import { Alert, Badge, Button, Dialog, Field, Menu, MenuItem, Spinner, toast, useShellTitle } from "@ferrum/kit";
+import { Alert, Badge, Button, Dialog, Field, Menu, MenuItem, Spinner, toast, useShellTitle, placed } from "@ferrum/kit";
 import { copyText } from "./clipboard";
 import { MarkPad, MarkView } from "./Pad";
 import { PdfPage, usePdf } from "./PdfPage";
@@ -43,15 +43,15 @@ import { deadline, timeLeft } from "./time";
 import { short } from "./track";
 
 const enc = encodeURIComponent;
-const OFFLINE = "We couldn't reach the server. Check your connection and try again.";
+const offline = () => tr("We couldn't reach the server. Check your connection and try again.");
 
 const LABEL: Record<FieldType, string> = {
-  Signature: "Sign here",
-  Initials: "Initial here",
-  "Date Signed": "Date signed",
-  Name: "Name",
-  Text: "Text",
-  Checkbox: "Tick",
+  get Signature() { return tr("Sign here"); },
+  get Initials() { return tr("Initial here"); },
+  get "Date Signed"() { return tr("Date signed"); },
+  get Name() { return tr("Name"); },
+  get Text() { return tr("Text"); },
+  get Checkbox() { return tr("Tick"); },
 };
 
 const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -86,7 +86,7 @@ export function SigningPage() {
       const r = await call("");
       setPhase(classify(r.status, await r.json().catch(() => null), code.current !== ""));
     } catch {
-      setPhase({ kind: "failed", message: OFFLINE });
+      setPhase({ kind: "failed", message: offline() });
     }
   }, [call, link]);
 
@@ -127,7 +127,7 @@ export function SigningPage() {
     case "waiting":
       return (
         <Frame>
-          <Notice icon={<Clock size={22} />} title={tr("It isn't your turn yet")} text="This document is signed one person at a time, and someone before you hasn't signed yet. You'll be sent this link again when it is your turn, and it will work then.">
+          <Notice icon={<Clock size={22} />} title={tr("It isn't your turn yet")} text={tr("This document is signed one person at a time, and someone before you hasn't signed yet. You'll be sent this link again when it is your turn, and it will work then.")}>
             <Button onClick={() => void open()}>{tr("Check again")}</Button>
           </Notice>
         </Frame>
@@ -139,7 +139,7 @@ export function SigningPage() {
             icon={<Link2Off size={22} />}
             tone="warn"
             title={tr("This link doesn't work")}
-            text="It may have been mistyped, or replaced by a newer one. Use the most recent link you were sent, or ask the sender for a new one."
+            text={tr("It may have been mistyped, or replaced by a newer one. Use the most recent link you were sent, or ask the sender for a new one.")}
           />
         </Frame>
       );
@@ -168,8 +168,8 @@ export function SigningPage() {
             title={tr("You've signed")}
             text={
               phase.requestStatus === "Completed"
-                ? "Everyone has now signed, so the document is sealed and the sender has the finished copy."
-                : "Your signature is recorded. The others still have to sign; the sender is told when everyone has."
+                ? tr("Everyone has now signed, so the document is sealed and the sender has the finished copy.")
+                : tr("Your signature is recorded. The others still have to sign; the sender is told when everyone has.")
             }
           >
             <dl className="sg-facts sg-receipt">
@@ -193,7 +193,7 @@ export function SigningPage() {
     case "declined":
       return (
         <Frame>
-          <Notice icon={<Ban size={22} />} tone="warn" title={tr("You declined to sign")} text="The sender has been told, and this request is closed for everyone. If you change your mind, ask them to send a new one." />
+          <Notice icon={<Ban size={22} />} tone="warn" title={tr("You declined to sign")} text={tr("The sender has been told, and this request is closed for everyone. If you change your mind, ask them to send a new one.")} />
         </Frame>
       );
     case "ready":
@@ -381,7 +381,7 @@ export function Ready({
       if (r.status === 422) {
         const found = problemsOf(Array.isArray(body?.fields) ? body.fields : [], fields);
         setProblems(found);
-        setError(Object.keys(found).length ? null : sentence(body?.message ?? "") || "Something in your answers wasn't accepted.");
+        setError(Object.keys(found).length ? null : sentence(body?.message ?? "") || tr("Something in your answers wasn't accepted."));
         return;
       }
       // Spent or withdrawn, or signed already in another tab: the page says so. Anything else
@@ -390,7 +390,7 @@ export function Ready({
       if (r.status === 409) return reopen();
       setError(sentence(body?.message ?? "") || tr("Something went wrong ({status}).", { status: r.status }));
     } catch {
-      setError(OFFLINE);
+      setError(offline());
     } finally {
       setBusy(false);
     }
@@ -410,7 +410,7 @@ export function Ready({
       }
       return sentence(body?.fields?.[0]?.message ?? body?.message ?? "") || tr("Something went wrong ({status}).", { status: r.status });
     } catch {
-      return OFFLINE;
+      return offline();
     }
   };
 
@@ -443,7 +443,7 @@ export function Ready({
             <span style={{ width: `${done.total ? (done.done / done.total) * 100 : 0}%` }} />
           </div>
         </div>
-        <Menu ariaLabel="More" label={<Ellipsis size={18} aria-hidden="true" />} buttonClass="icon-btn" align="end">
+        <Menu ariaLabel={tr("More")} label={<Ellipsis size={18} aria-hidden="true" />} buttonClass="icon-btn" align="end">
           {(close) => (
             <>
               <MenuItem
@@ -678,8 +678,7 @@ export function Ready({
       >
         <div className="stack" style={{ gap: 14 }}>
           <p>
-            {tr("You are signing")} <strong>{isolate(request.title)}</strong> {tr("as")} <strong>{name || tr("the signer")}</strong>
-            {signer.role ? ` (${signer.role})` : ""}.
+            {placed(tr("You are signing {p1} as {p2}{p3}"), { p1: <strong>{isolate(request.title)}</strong>, p2: <strong>{name || tr("the signer")}</strong>, p3: signer.role ? ` (${signer.role})` : "" })}.
           </p>
           {(entry.signature || entry.initials) && (
             <div className="sg-review-marks">
@@ -799,7 +798,7 @@ function Box({
       content = state === "done" ? <Check size="1.2em" aria-hidden="true" /> : <span className="sg-tick" aria-hidden="true" />;
       break;
   }
-  const status = state === "auto" ? "filled in for you" : state === "done" ? "done" : f.required ? "required" : "optional";
+  const status = state === "auto" ? tr("filled in for you") : state === "done" ? "done" : f.required ? "required" : "optional";
   if (state === "auto" || !task) {
     return (
       <div id={`box-${f.id}`} className="sg-box" data-state="auto" data-kind={f.field_type} style={style} title={tr("{word}: filled in for you when you sign", { word })}>
@@ -817,7 +816,7 @@ function Box({
       data-problem={problem ? "" : undefined}
       style={style}
       title={problem ?? word}
-      aria-label={tr("{word}, page {page}, {status}{value}", { word, page: f.page, status, value: problem ? `. ${problem}` : "" })}
+      aria-label={(problem ? tr("{word}, page {page}, {status}. {problem}", { word, page: f.page, status, problem }) : tr("{word}, page {page}, {status}", { word, page: f.page, status }))}
       onClick={() => onActivate(task)}
     >
       {content}
@@ -846,7 +845,9 @@ function Preview({ src }: { src: string }) {
 function DocumentLink({ base, hasCode, call, name, pages }: { base: string; hasCode: boolean; call: Call; name?: string | null; pages: number }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const label = tr("{value} the PDF{value2}", { value: hasCode ? "Download" : "Open", value2: pages ? ` (${pages} ${pages === 1 ? "page" : "pages"})` : "" });
+  const label = hasCode
+    ? !pages ? tr("Download the PDF") : pages === 1 ? tr("Download the PDF (1 page)") : tr("Download the PDF ({n} pages)", { n: pages })
+    : !pages ? tr("Open the PDF") : pages === 1 ? tr("Open the PDF (1 page)") : tr("Open the PDF ({n} pages)", { n: pages });
   if (!hasCode)
     return (
       <a className="btn btn-md" href={`${base}/document`} target="_blank" rel="noopener noreferrer">
@@ -858,10 +859,10 @@ function DocumentLink({ base, hasCode, call, name, pages }: { base: string; hasC
     setError(null);
     try {
       const r = await call("/document");
-      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message ?? "The document couldn't be fetched.");
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.message ?? tr("The document couldn't be fetched."));
       saveBlob(await r.blob(), name || "document.pdf");
     } catch (e) {
-      setError(e instanceof Error ? e.message : OFFLINE);
+      setError(e instanceof Error ? e.message : offline());
     } finally {
       setBusy(false);
     }
@@ -914,7 +915,7 @@ export function DeclineDialog({ open, onClose, onDecline }: { open: boolean; onC
     >
       <div className="stack" style={{ gap: 12 }}>
         <p>
-          {tr("Declining ends this request")} <strong>{tr("for everyone")}</strong>{tr(", and the sender is told why. You can't undo it from here.")}
+          {placed(tr("Declining ends this request {p1}, and the sender is told why. You can't undo it from here."), { p1: <strong>{tr("for everyone")}</strong> })}
         </p>
         <Field label={tr("Why are you declining?")} htmlFor="sg-reason" required error={error ?? undefined} hint={tr("The sender reads this.")}>
           <textarea id="sg-reason" className="textarea" rows={3} maxLength={1000} value={reason} onChange={(e) => setReason(e.target.value)} />
@@ -929,10 +930,10 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
     <Dialog open={open} onClose={onClose} title={tr("What kind of signature this is")} footer={<Button variant="primary" onClick={onClose}>{tr("Got it")}</Button>}>
       <div className="stack sg-about" style={{ gap: 10 }}>
         <p>
-          {tr("This is an")} <strong>{tr("electronic signature with an audit trail")}</strong>{tr(". When you sign, Sign records that you agreed, when, and from which browser, and seals the finished PDF with an extra page that lists those steps. If the file is changed afterwards, a check of it shows.")}
+          {placed(tr("This is an {p1}. When you sign, Sign records that you agreed, when, and from which browser, and seals the finished PDF with an extra page that lists those steps. If the file is changed afterwards, a check of it shows."), { p1: <strong>{tr("electronic signature with an audit trail")}</strong> })}
         </p>
         <p>
-          {tr("It is")} <strong>{tr("not")}</strong> {tr("a PAdES signature, and not an advanced or qualified electronic signature. The PDF carries no certificate that a PDF reader can validate, and you are identified by your personal link (and your access code, if you were given one), not by an identity check.")}
+          {placed(tr("It is {p1} a PAdES signature, and not an advanced or qualified electronic signature. The PDF carries no certificate that a PDF reader can validate, and you are identified by your personal link (and your access code, if you were given one), not by an identity check."), { p1: <strong>{tr("not")}</strong> })}
         </p>
         <p>
           {tr("Many agreements can be signed this way; whether it is enough for yours is for you and the sender to decide. If a law or the other side needs a qualified signature, don't sign here.")}

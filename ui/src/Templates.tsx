@@ -129,7 +129,7 @@ export function TemplateCards({ limit }: { limit?: number }) {
             <div className="sg-card-body">
               <strong>{isolate(t.template_name)}</strong>
               <span className="faint">
-                {isolate([t.page_count ? `${t.page_count} ${t.page_count === 1 ? "page" : "pages"}` : null, t.signing_mode === "Parallel" ? "All sign at once" : "Signed in order", t.document_name].filter(Boolean).join(" · "))}
+                {isolate([t.page_count ? `${t.page_count} ${t.page_count === 1 ? "page" : "pages"}` : null, t.signing_mode === "Parallel" ? tr("All sign at once") : tr("Signed in order"), t.document_name].filter(Boolean).join(" · "))}
               </span>
             </div>
             <div className="sg-card-actions">

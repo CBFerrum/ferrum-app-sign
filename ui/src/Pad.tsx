@@ -186,7 +186,7 @@ export function MarkPad({ kind, typed: start, onChange }: { kind: "signature" | 
       <div role="tabpanel" id="mark-panel-type" aria-labelledby="mark-tab-type" hidden={mode !== "type"}>
         <div className="stack" style={{ gap: 8 }}>
           <label className="field-label" htmlFor="mark-text">
-            {tr("Type your")} {kind === "signature" ? tr("full name") : tr("initials")}
+            {(kind === "signature" ? tr("Type your full name") : tr("Type your initials"))}
           </label>
           <input id="mark-text" className="input" value={text} maxLength={kind === "signature" ? 100 : 10} autoComplete="off" onChange={(e) => setText(e.target.value)} />
           <div className="sg-paper sg-typed" aria-hidden="true">

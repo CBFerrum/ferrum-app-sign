@@ -83,7 +83,7 @@ export function classify(status: number, body: unknown, sentCode: boolean): Reac
   if (status === 401) return { kind: "code" };
   if (status === 403) {
     if (/not your turn/i.test(message)) return { kind: "waiting", message: sentence(message) };
-    return sentCode ? { kind: "code", problem: "That code isn't right. Check it and try again." } : { kind: "failed", message: sentence(message) || "You can't open this link." };
+    return sentCode ? { kind: "code", problem: tr("That code isn't right. Check it and try again.") } : { kind: "failed", message: sentence(message) || tr("You can't open this link.") };
   }
   if (status === 404) return { kind: "invalid" };
   if (status === 410) {
@@ -98,7 +98,7 @@ export function classify(status: number, body: unknown, sentCode: boolean): Reac
     else why = "expired";
     return { kind: "closed", why, requestStatus: request };
   }
-  if (status === 429) return { kind: "locked", message: sentence(message) || "Too many wrong codes. Try again in a few minutes." };
+  if (status === 429) return { kind: "locked", message: sentence(message) || tr("Too many wrong codes. Try again in a few minutes.") };
   return { kind: "failed", message: sentence(message) || tr("Something went wrong ({status}).", { status }) };
 }
 
@@ -110,19 +110,19 @@ export function closedCopy(why: Why, requestStatus: string | null): { title: str
         title: tr("You've already signed"),
         text:
           requestStatus === "Completed"
-            ? "Everyone has now signed. The sender has the sealed copy."
-            : "Thank you. The others still have to sign; the sender is told when everyone has.",
+            ? tr("Everyone has now signed. The sender has the sealed copy.")
+            : tr("Thank you. The others still have to sign; the sender is told when everyone has."),
       };
     case "declined":
-      return { title: tr("You declined to sign"), text: "The sender was told and this request is closed. If you changed your mind, ask them to send a new one." };
+      return { title: tr("You declined to sign"), text: tr("The sender was told and this request is closed. If you changed your mind, ask them to send a new one.") };
     case "completed":
-      return { title: tr("Everyone has signed"), text: "This request is finished, so the link no longer works." };
+      return { title: tr("Everyone has signed"), text: tr("This request is finished, so the link no longer works.") };
     case "request_declined":
-      return { title: tr("This request was declined"), text: "Someone declined to sign, so it can't be signed any more. Contact the sender if you have questions." };
+      return { title: tr("This request was declined"), text: tr("Someone declined to sign, so it can't be signed any more. Contact the sender if you have questions.") };
     case "voided":
-      return { title: tr("The sender withdrew this request"), text: "There is nothing to sign any more. Contact the sender if you think this is a mistake." };
+      return { title: tr("The sender withdrew this request"), text: tr("There is nothing to sign any more. Contact the sender if you think this is a mistake.") };
     case "expired":
-      return { title: tr("This request has expired"), text: "The deadline has passed. Ask the sender to send a new request." };
+      return { title: tr("This request has expired"), text: tr("The deadline has passed. Ask the sender to send a new request.") };
   }
 }
 
@@ -166,8 +166,8 @@ export function tasksOf(fields: SigningField[]): Task[] {
     const mine = sorted.filter((f) => f.field_type === type);
     if (mine.length) out.push({ key: kind, kind, label, required: mine.some((f) => f.required), fields: mine });
   };
-  shared("signature", "Signature", "Your signature");
-  shared("initials", "Initials", "Your initials");
+  shared("signature", "Signature", tr("Your signature"));
+  shared("initials", "Initials", tr("Your initials"));
   for (const f of sorted) {
     if (f.field_type === "Text") out.push({ key: f.id, kind: "text", label: f.label || tr("Text"), required: f.required, fields: [f] });
     if (f.field_type === "Checkbox") out.push({ key: f.id, kind: "checkbox", label: f.label || tr("Checkbox"), required: f.required, fields: [f] });
@@ -208,12 +208,12 @@ export function nextTask(tasks: Task[], e: Entry, from?: string): Task | null {
 
 /** What the primary button says it will do next. */
 export function actionLabel(next: Task | null): string {
-  if (!next) return "Review and sign";
+  if (!next) return tr("Review and sign");
   switch (next.kind) {
     case "signature":
-      return "Add your signature";
+      return tr("Add your signature");
     case "initials":
-      return "Add your initials";
+      return tr("Add your initials");
     case "text":
       return tr("Fill in “{label}”", { label: next.label });
     case "checkbox":
