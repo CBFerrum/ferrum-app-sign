@@ -39,6 +39,7 @@
   "Expiry Days": "समाप्ति दिन",
   "Failed Attempts": "असफल प्रयास",
   "Fields": "फ़ील्ड",
+  "Group By": "इसके अनुसार समूह",
   "HMAC key that signs signer links and salts IP hashes; created automatically. Rotating it retires every outstanding link": "HMAC कुंजी जो हस्ताक्षरकर्ता लिंक पर हस्ताक्षर करती और IP हैश में नमक मिलाती है; अपने आप बनती है। इसे बदलने से हर बकाया लिंक बंद हो जाता है",
   "Height": "ऊँचाई",
   "IP Hash": "IP हैश",
