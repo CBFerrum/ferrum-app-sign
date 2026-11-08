@@ -39,6 +39,7 @@
   "Expiry Days": "أيام الصلاحية",
   "Failed Attempts": "المحاولات الفاشلة",
   "Fields": "الحقول",
+  "Group By": "التجميع حسب",
   "HMAC key that signs signer links and salts IP hashes; created automatically. Rotating it retires every outstanding link": "مفتاح HMAC يوقّع روابط الموقّعين ويُملّح تجزئات IP؛ يُنشأ تلقائيًا. وتدويره يوقف كل رابط قائم",
   "Height": "الارتفاع",
   "IP Hash": "تجزئة IP",
