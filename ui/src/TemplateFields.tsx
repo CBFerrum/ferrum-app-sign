@@ -42,7 +42,7 @@ function TemplateFields({ template }: { template: Template }) {
       qc.setQueryData(templateQuery(template.id).queryKey, saved);
       toast(t("Boxes saved"));
     } catch (e) {
-      setError(e instanceof ApiError && e.status === 409 ? "Someone else changed this template. Reload the page to see their version." : errorMessage(e));
+      setError(e instanceof ApiError && e.status === 409 ? t("Someone else changed this template. Reload the page to see their version.") : errorMessage(e));
     } finally {
       setSaving(false);
     }

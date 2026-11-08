@@ -117,7 +117,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
   const everyPage = (b: Box) => {
     const copies = spread(b, pages, boxes);
     if (copies.length) ed.set((prev) => [...prev, ...copies]);
-    say(copies.length ? (copies.length === 1 ? t("Copied to 1 more page.") : t("Copied to {n} more pages.", { n: copies.length })) : "It is already on every page.");
+    say(copies.length ? (copies.length === 1 ? t("Copied to 1 more page.") : t("Copied to {n} more pages.", { n: copies.length })) : t("It is already on every page."));
   };
   const duplicate = (b: Box) => {
     const c = copyOf(b, pages[b.page - 1] ?? { width: 612, height: 792 });
@@ -197,7 +197,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
     if (mod && (k === "z" || k === "y")) {
       e.preventDefault();
       const again = k === "y" || e.shiftKey;
-      say(again ? "Redone." : "Undone.");
+      say(again ? t("Redone.") : t("Undone."));
       return again ? ed.redo() : ed.undo();
     }
     if (mod && k === "v" && clip) {
@@ -217,7 +217,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
     }
     if (mod && k === "c") {
       e.preventDefault();
-      say("Copied. Paste it with Ctrl or ⌘ V.");
+      say(t("Copied. Paste it with Ctrl or ⌘ V."));
       return setClip(sel);
     }
     if (e.key === "Delete" || e.key === "Backspace") {
@@ -243,10 +243,10 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
   return (
     <div className="sg-editor" ref={root} onKeyDown={onKey} style={{ "--zoom": zoom } as CSSProperties}>
       <div className="sg-edit-bar" role="toolbar" aria-label={t("Page tools")}>
-        <Button size="sm" onClick={() => (say("Undone."), ed.undo())} disabled={!ed.canUndo} aria-label={t("Undo")}>
+        <Button size="sm" onClick={() => (say(t("Undone.")), ed.undo())} disabled={!ed.canUndo} aria-label={t("Undo")}>
           <Undo2 size={15} aria-hidden="true" /> {t("Undo")}
         </Button>
-        <Button size="sm" onClick={() => (say("Redone."), ed.redo())} disabled={!ed.canRedo} aria-label={t("Redo")}>
+        <Button size="sm" onClick={() => (say(t("Redone.")), ed.redo())} disabled={!ed.canRedo} aria-label={t("Redo")}>
           <Redo2 size={15} aria-hidden="true" /> {t("Redo")}
         </Button>
         <span className="sg-edit-sep" />

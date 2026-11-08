@@ -8,7 +8,7 @@ import { type CSSProperties, useCallback, useEffect, useRef, useState } from "re
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { ArrowDown, ArrowUp, Check, Info, Plus, Send, Trash } from "lucide-react";
 import { api, ApiError, docPath, download, errorMessage, type FieldError, todayIso, t, isolate } from "@ferrum/client";
-import { Alert, Badge, Button, confirmDialog, ErrorState, Field, PageLoading, toast, useLiveEntity, useShellTitle, useUnsavedGuard } from "@ferrum/kit";
+import { Alert, Badge, Button, confirmDialog, ErrorState, Field, PageLoading, toast, useLiveEntity, useShellTitle, useUnsavedGuard, placed } from "@ferrum/kit";
 import { refresh, requestQuery, sendRequest } from "./data";
 import { Editor, useBoxes } from "./Editor";
 import { pageSizes, type SignRequest } from "./model";
@@ -182,7 +182,7 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
             </Button>
           }
         >
-          {t("This request was changed somewhere else.")} {dirty ? t("Your unsaved changes would be lost by loading it; saving now is refused.") : ""}
+          {(dirty ? t("This request was changed somewhere else. Your unsaved changes would be lost by loading it; saving now is refused.") : t("This request was changed somewhere else."))}
         </Alert>
       )}
       {error && <Alert tone="error">{isolate(error)}</Alert>}
@@ -230,7 +230,7 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
   const inTurn = draft.signing_mode === "Sequential";
   const remove = async (s: SignerDraft) => {
     const boxes = draft.boxes.filter((b) => b.role.trim().toLowerCase() === s.role.trim().toLowerCase()).length;
-    if (boxes && !(await confirmDialog({ title: t("Remove {value}?", { value: s.name || s.role }), message: t("Their {boxes} {value} with them.", { boxes, value: boxes === 1 ? "box goes" : "boxes go" }), confirmLabel: t("Remove"), danger: true }))) return;
+    if (boxes && !(await confirmDialog({ title: t("Remove {value}?", { value: s.name || s.role }), message: t("Their {boxes} {value} with them.", { boxes, value: boxes === 1 ? t("box goes") : t("boxes go") }), confirmLabel: t("Remove"), danger: true }))) return;
     apply((d) => removeSigner(d, s.key));
   };
   const shown = (step: "signers" | "details") => problems.filter((p) => p.step === step);
@@ -277,7 +277,7 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
                 <Field label={t("Name")} htmlFor={`s-name-${i}`} required error={rowMessage(rows, "signers", i, "name")}>
                   <input id={`s-name-${i}`} className="input" value={s.name} autoComplete="off" onChange={(e) => apply((d) => editSigner(d, s.key, { name: e.target.value }))} />
                 </Field>
-                <Field label={t("Email")} htmlFor={`s-email-${i}`} required error={rowMessage(rows, "signers", i, "email") ?? (s.email.trim() && !looksLikeEmail(s.email) ? "This doesn't look like an email address." : undefined)}>
+                <Field label={t("Email")} htmlFor={`s-email-${i}`} required error={rowMessage(rows, "signers", i, "email") ?? (s.email.trim() && !looksLikeEmail(s.email) ? t("This doesn't look like an email address.") : undefined)}>
                   <input id={`s-email-${i}`} className="input" type="email" value={s.email} autoComplete="off" onChange={(e) => apply((d) => editSigner(d, s.key, { email: e.target.value }))} />
                 </Field>
                 {inTurn && (
@@ -378,7 +378,7 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
             {isolate(request.document_name ?? "")}
             <span className="faint">
               {isolate(" ")}
-              · {request.page_count} {request.page_count === 1 ? t("page") : t("pages")} {t("· fingerprint")} <span className="mono" title={request.document_sha256 ?? ""}>{isolate(short(request.document_sha256))}</span>
+              · {placed(request.page_count === 1 ? t("1 page · fingerprint {sha}") : t("{n} pages · fingerprint {sha}", { n: request.page_count ?? 0 }), { sha: <span className="mono" title={request.document_sha256 ?? ""}>{isolate(short(request.document_sha256))}</span> })}
             </span>
           </dd>
           <dt>{t("Title")}</dt>
@@ -415,8 +415,10 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
           {t("What happens next")}
         </h2>
         <ul className="sg-next">
-          <li>{first.length ? t("{first} {value} a personal link to sign{value2}.", { first: names(first), value: first.length > 1 ? "get" : "gets", value2: parallel ? "" : " first" }) : t("Nobody has been added yet.")}</li>
-          {!parallel && groups.length > 1 && <li>{t("The next")} {groups.length > 2 ? t("people follow") : t("person follows")} {t("when the ones before have signed.")}</li>}
+          <li>{first.length ? first.length > 1
+              ? parallel ? t("{first} get a personal link to sign.", { first: names(first) }) : t("{first} get a personal link to sign first.", { first: names(first) })
+              : parallel ? t("{first} gets a personal link to sign.", { first: names(first) }) : t("{first} gets a personal link to sign first.", { first: names(first) }) : t("Nobody has been added yet.")}</li>
+          {!parallel && groups.length > 1 && <li>{placed(t("The next {p1} when the ones before have signed."), { p1: groups.length > 2 ? t("people follow") : t("person follows") })}</li>}
           <li>{t("If your workspace can't send email, you are given each link to pass on.")}</li>
           <li>{t("You see who has opened and signed, can send reminders, and download the sealed copy when everyone has signed.")}</li>
         </ul>

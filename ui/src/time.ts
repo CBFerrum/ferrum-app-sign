@@ -16,8 +16,8 @@ export function timeLeft(deadline: string | null | undefined, now = Date.now()):
   const at = deadline ? new Date(deadline).getTime() : NaN;
   if (Number.isNaN(at)) return null;
   const minutes = Math.floor((at - now) / 60_000);
-  if (minutes <= 0) return { text: "Expired", level: "late" };
-  if (minutes < 60) return { text: "Under an hour left", level: "soon" };
+  if (minutes <= 0) return { text: tr("Expired"), level: "late" };
+  if (minutes < 60) return { text: tr("Under an hour left"), level: "soon" };
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return { text: tr("{value} left", { value: String((hours === 1 ? tr("1 hour") : tr("{n} hours", { n: hours }))) }), level: "soon" };
   const days = Math.floor(hours / 24);
