@@ -7,7 +7,7 @@ import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { FileText, Plus } from "lucide-react";
 import { api, docPath, errorMessage, type FieldError, t as tr, isolate } from "@ferrum/client";
-import { Alert, Button, Dialog, EmptyState, ErrorState, Field, Spinner, useShellTitle } from "@ferrum/kit";
+import { Alert, Button, Dialog, Field, FormSkeleton, ListSkeleton, StatePanel, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta } from "@ferrum/records";
 import { templateQuery, templatesQuery } from "./data";
 import { looksLikeEmail, peopleOf, type Person, templateBody } from "./send";
@@ -21,7 +21,7 @@ export function UseTemplate({ id, onClose }: { id: string; onClose: () => void }
   const t = q.data;
   return (
     <Dialog open onClose={onClose} title={t ? tr("Use “{template_name}”", { template_name: t.template_name }) : tr("Use a template")} wide>
-      {q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : !t ? <Spinner label={tr("Opening the template")} /> : <Form key={t.id} template={t} onClose={onClose} onMade={(rid) => navigate(`/request/${rid}/prepare/review`)} />}
+      {q.error ? <StatePanel kind="failed" error={q.error} onRetry={() => void q.refetch()} /> : !t ? <FormSkeleton fields={3} /> : <Form key={t.id} template={t} onClose={onClose} onMade={(rid) => navigate(`/request/${rid}/prepare/review`)} />}
     </Dialog>
   );
 }
@@ -103,20 +103,23 @@ export function TemplateCards({ limit }: { limit?: number }) {
   const writable = can(meta.data?.permissions, "write");
   const [using, setUsing] = useState<string | null>(null);
   const list = (q.data ?? []).slice(0, limit);
-  if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
-  if (!q.data) return <Spinner label={tr("Loading the templates")} />;
+  if (q.error) return <StatePanel kind="failed" error={q.error} onRetry={() => void q.refetch()} />;
+  if (!q.data) return <ListSkeleton rows={3} />;
   if (!list.length)
     return (
-      <EmptyState title={tr("No templates yet")} icon="file">
-        <p className="muted" style={{ maxWidth: "32rem" }}>
-          {tr("A template is a PDF you send again and again, with its signers' roles and boxes placed once, such as a standard agreement.")}
-        </p>
-        {writable && (
-          <Link className="btn btn-md" to="/e/SignTemplate/new">
-            <Plus size={15} aria-hidden="true" /> {tr("New template")}
-          </Link>
-        )}
-      </EmptyState>
+      <StatePanel
+        kind="empty"
+        title={tr("No templates yet")}
+        action={
+          writable ? (
+            <Link className="btn btn-md" to="/e/SignTemplate/new">
+              <Plus size={15} aria-hidden="true" /> {tr("New template")}
+            </Link>
+          ) : undefined
+        }
+      >
+        {tr("A template is a PDF you send again and again, with its signers' roles and boxes placed once, such as a standard agreement.")}
+      </StatePanel>
     );
   return (
     <>

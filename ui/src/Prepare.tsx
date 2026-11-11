@@ -8,7 +8,7 @@ import { type CSSProperties, useCallback, useEffect, useRef, useState } from "re
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { ArrowDown, ArrowUp, Check, Info, Plus, Send, Trash } from "lucide-react";
 import { api, ApiError, docPath, download, errorMessage, type FieldError, todayIso, t, isolate } from "@ferrum/client";
-import { Alert, Badge, Button, confirmDialog, ErrorState, Field, PageLoading, toast, useLiveEntity, useShellTitle, useUnsavedGuard, placed } from "@ferrum/kit";
+import { Alert, Badge, Button, confirmDialog, Field, FormSkeleton, StatePanel, toast, useLiveEntity, useShellTitle, useUnsavedGuard, placed } from "@ferrum/kit";
 import { refresh, requestQuery, sendRequest } from "./data";
 import { Editor, useBoxes } from "./Editor";
 import { pageSizes, type SignRequest } from "./model";
@@ -27,8 +27,8 @@ export function PrepareRoute() {
   const { id = "", step = "signers" } = useParams();
   const q = useQuery(requestQuery(id));
   useShellTitle(q.data ? t("{title}: prepare", { title: q.data.title }) : t("Prepare a request"));
-  if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
-  if (!q.data) return <PageLoading />;
+  if (q.error) return <StatePanel kind="failed" error={q.error} onRetry={() => void q.refetch()} />;
+  if (!q.data) return <FormSkeleton fields={5} />;
   // Only a draft can be prepared: a sent request is followed, not edited.
   if (q.data.status !== "Draft") return <Navigate to={`/request/${id}`} replace />;
   const at = STEPS.some((s) => s.id === step) ? (step as StepId) : "signers";
@@ -247,7 +247,7 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
             </button>
           ))}
         </div>
-        <p className="faint" style={{ fontSize: 12.5 }}>
+        <p className="faint" style={{ fontSize: "var(--text-xs)" }}>
           {inTurn ? t("Each person gets their link when the one before has signed. Give two people the same number to let them sign together.") : t("Everyone gets their link now and signs when they like.")}
         </p>
         {draft.signers.length === 0 && (
@@ -399,7 +399,7 @@ export function Review({ request, draft, problems, go }: { request: SignRequest;
               <span className={`sg-dot sg-c${colourOf(s.role, draft.signers.map((x) => x.role))}`} aria-hidden="true" />
               <div>
                 <strong>{s.name || s.role}</strong> <span className="faint">{isolate(s.email)}</span>
-                <div className="faint" style={{ fontSize: 12.5 }}>
+                <div className="faint" style={{ fontSize: "var(--text-xs)" }}>
                   {isolate(s.role)} · {isolate(boxCounts(draft.boxes, s.role))}
                   {!parallel && t(" · turn {signing_order}", { signing_order: s.signing_order })}
                   {(s.hasCode || s.accessCode) && t(" · access code")}

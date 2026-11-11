@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { api, ApiError, docPath, download, errorMessage, t, isolate } from "@ferrum/client";
-import { Alert, Button, ErrorState, PageLoading, toast, useShellTitle, useUnsavedGuard } from "@ferrum/kit";
+import { Alert, Button, FormSkeleton, StatePanel, toast, useShellTitle, useUnsavedGuard } from "@ferrum/kit";
 import { templateQuery } from "./data";
 import { Editor, useBoxes } from "./Editor";
 import { pageSizes, type Template } from "./model";
@@ -15,8 +15,8 @@ export function TemplateFieldsRoute() {
   const { id = "" } = useParams();
   const q = useQuery(templateQuery(id));
   useShellTitle(q.data ? t("{template_name}: boxes", { template_name: q.data.template_name }) : t("Template boxes"));
-  if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
-  if (!q.data) return <PageLoading />;
+  if (q.error) return <StatePanel kind="failed" error={q.error} onRetry={() => void q.refetch()} />;
+  if (!q.data) return <FormSkeleton fields={5} />;
   return <TemplateFields key={id} template={q.data} />;
 }
 

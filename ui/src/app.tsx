@@ -8,7 +8,7 @@ import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, Link, RouterProvider, useRouteError } from "react-router";
 import { routeBase, shell, t, wordsReady } from "@ferrum/client";
-import { ConfirmHost, EmptyState, ErrorState, Toaster } from "@ferrum/kit";
+import { ConfirmHost, StatePanel, Toaster } from "@ferrum/kit";
 import { RequireAuth, setFrameMode } from "@ferrum/records/frame";
 import { Requests } from "./Requests";
 
@@ -23,14 +23,12 @@ const queryClient = new QueryClient({
 });
 
 function RouteError() {
-  return <ErrorState error={useRouteError()} onRetry={() => window.location.reload()} />;
+  return <StatePanel kind="failed" error={useRouteError()} onRetry={() => window.location.reload()} />;
 }
 
 function NotFound() {
   return (
-    <EmptyState title={t("Page not found")}>
-      <Link to="/">{t("Go to your requests")}</Link>
-    </EmptyState>
+    <StatePanel kind="empty" title={t("Page not found")} action={<Link to="/">{t("Go to your requests")}</Link>} />
   );
 }
 
