@@ -579,7 +579,7 @@ export function Ready({
             </Button>
             {!everything && target === null && <p className="faint">{tr("Nothing required is left.")}</p>}
           </div>
-          <p className="faint" style={{ fontSize: 12.5 }}>
+          <p className="faint" style={{ fontSize: "var(--text-xs)" }}>
             {tr("This link is yours alone: signing with it is recorded as you. Please don't forward it.")}
           </p>
           <p className="sg-kind">

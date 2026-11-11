@@ -6,7 +6,7 @@ import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { Ellipsis, Plus } from "lucide-react";
 import { api, docPath, download, errorMessage, relativeTime, t as tr, isolate } from "@ferrum/client";
-import { Badge, Button, confirmDialog, EmptyState, ErrorState, Spinner, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
+import { Badge, Button, confirmDialog, ListSkeleton, StatePanel, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Skeleton } from "@ferrum/kit/primitives";
 import { act, refresh, requestQuery } from "./data";
 import { LinksDialog } from "./Links";
@@ -97,30 +97,29 @@ export function Requests() {
 
   const tabInfo = TABS.find((t) => t.id === tab)!;
   const body = q.error ? (
-    <ErrorState error={q.error} onRetry={() => void q.refetch()} />
+    <StatePanel kind="failed" error={q.error} onRetry={() => void q.refetch()} />
   ) : !q.data ? (
-    <Spinner label={tr("Loading your requests")} />
+    <ListSkeleton rows={5} />
   ) : !rows.length ? (
-    <EmptyState title={tr("Send your first document for signature")} icon="file">
-      <p className="muted" style={{ maxWidth: "34rem" }}>
-        {tr("Upload a PDF, say who signs and where, and each person gets a link to sign on any device, with no account. You see who has signed, and the finished document keeps an audit trail.")}
-      </p>
-      <Link className="btn btn-primary btn-md" to="/new">
-        <Plus size={15} aria-hidden="true" /> {tr("New request")}
-      </Link>
-    </EmptyState>
+    <StatePanel
+      kind="empty"
+      title={tr("Send your first document for signature")}
+      action={
+        <Link className="btn btn-primary btn-md" to="/new">
+          <Plus size={15} aria-hidden="true" /> {tr("New request")}
+        </Link>
+      }
+    >
+      {tr("Upload a PDF, say who signs and where, and each person gets a link to sign on any device, with no account. You see who has signed, and the finished document keeps an audit trail.")}
+    </StatePanel>
   ) : !shown.length ? (
-    <EmptyState title={search ? tr("Nothing matches") : tabInfo.empty} icon={search ? "search" : "check"}>
-      {search ? (
-        <button type="button" className="link-btn" onClick={() => show({ q: null })}>
-          {tr("Clear the search")}
-        </button>
-      ) : (
-        (tab === "progress" || tab === "drafts") && (
-          <Link to="/new">{tr("Start a request")}</Link>
-        )
-      )}
-    </EmptyState>
+    <StatePanel
+      kind={search ? "no-matches" : "empty"}
+      title={search ? tr("Nothing matches") : tabInfo.empty}
+      onClear={search ? () => show({ q: null }) : undefined}
+      clearLabel={tr("Clear the search")}
+      action={!search && (tab === "progress" || tab === "drafts") ? <Link to="/new">{tr("Start a request")}</Link> : undefined}
+    />
   ) : (
     <ul className="sg-list" aria-label={tabInfo.label}>
       {shown.map((r) => {

@@ -145,7 +145,7 @@ function Drawing({ height, hint, onChange }: { height: string; hint: string; onC
         <Button size="sm" onClick={clear} disabled={drawn === 0}>
           {tr("Clear")}
         </Button>
-        <span className="faint" style={{ fontSize: 12.5 }}>
+        <span className="faint" style={{ fontSize: "var(--text-xs)" }}>
           {tr("Use your finger, a pen or the mouse.")}
         </span>
       </div>
@@ -192,7 +192,7 @@ export function MarkPad({ kind, typed: start, onChange }: { kind: "signature" | 
           <div className="sg-paper sg-typed" aria-hidden="true">
             {text.trim() || <span className="sg-canvas-hint">{tr("Your {what} appears here", { what })}</span>}
           </div>
-          <p className="faint" style={{ fontSize: 12.5 }}>
+          <p className="faint" style={{ fontSize: "var(--text-xs)" }}>
             {tr("A typed {what} is stamped on the document in italic type, as shown.", { what })}
           </p>
         </div>

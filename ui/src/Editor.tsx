@@ -386,7 +386,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
                 </button>
               ))}
             </div>
-            <p className="faint" style={{ fontSize: 12.5 }}>
+            <p className="faint" style={{ fontSize: "var(--text-xs)" }}>
               {t("Click to add one to the page in view, or drag it onto a page. For")} {roles.find((r) => r.role === role)?.label ?? role}.
             </p>
           </section>
@@ -406,7 +406,7 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
           ) : (
             <section className="sg-side-block">
               <h3>{t("Keyboard")}</h3>
-              <p className="faint" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+              <p className="faint" style={{ fontSize: "var(--text-xs)", lineHeight: 1.5 }}>
                 {t("Tab to a box. Arrow keys move it a point (Shift: ten); Alt with the arrows changes its size. Delete removes it, Ctrl or ⌘ with D copies it in place, C and V copy and paste, Z undoes.")}
               </p>
             </section>
@@ -512,7 +512,7 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
           {num("width", t("Width"), size.width)}
           {num("height", t("Height"), size.height)}
         </div>
-        <p className="faint" style={{ fontSize: 12 }}>
+        <p className="faint" style={{ fontSize: "var(--text-xs)" }}>
           {t("In points (72 to the inch) from the top left of page {page}.", { page: b.page })}
         </p>
         <div className="row">
