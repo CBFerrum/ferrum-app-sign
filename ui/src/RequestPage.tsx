@@ -7,7 +7,7 @@ import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router";
 import { Ban, Bell, Check, Clock, Copy, Download, Ellipsis, Eye, Hash, Info, Mail, PenLine, X } from "lucide-react";
 import { api, ApiError, docPath, download, errorMessage, relativeTime, shell, t as tr, isolate } from "@ferrum/client";
-import { Alert, Badge, Button, Dialog, ErrorState, Field, PageLoading, Spinner, toast, useLiveEntity, useShellTitle, placed } from "@ferrum/kit";
+import { Alert, Badge, Button, Dialog, Field, ListSkeleton, ReaderSkeleton, StatePanel, toast, useLiveEntity, useShellTitle, placed } from "@ferrum/kit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@ferrum/kit/primitives";
 import { copyText } from "./clipboard";
 import { act, eventsQuery, refresh, requestQuery } from "./data";
@@ -23,8 +23,8 @@ export function RequestRoute() {
   useLiveEntity("SignRequest", useCallback((e) => void (e.id === id && refresh(qc, id)), [qc, id]));
   useLiveEntity("SignEvent", useCallback(() => void qc.invalidateQueries({ queryKey: ["sign", "events", id] }), [qc, id]));
   useShellTitle(q.data?.title);
-  if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
-  if (!q.data) return <PageLoading />;
+  if (q.error) return <StatePanel kind="failed" error={q.error} onRetry={() => void q.refetch()} />;
+  if (!q.data) return <ReaderSkeleton paragraphs={3} />;
   if (q.data.status === "Draft") return <Navigate to={`/request/${id}/prepare`} replace />;
   return <RequestView key={id} request={q.data} />;
 }
@@ -192,7 +192,7 @@ export function RequestView({ request: r }: { request: SignRequest }) {
 
           <section className="sg-side-card" aria-labelledby="int-head">
             <h3 id="int-head">{tr("Integrity")}</h3>
-            <p className="faint" style={{ fontSize: 12.5 }}>
+            <p className="faint" style={{ fontSize: "var(--text-xs)" }}>
               {tr("Checks that the stored files and the trail are as they were when sent and signed.")}
             </p>
             <Button loading={busy === "verify"} onClick={() => void check()}>
@@ -329,8 +329,8 @@ function Signers({ request: r, onAgain, onCorrect }: { request: SignRequest; onA
 const TRAIL_ICON: Record<string, typeof Check> = { Sent: Mail, Viewed: Eye, Signed: PenLine, Declined: Ban, Reminded: Bell, Resent: Mail, Completed: Check };
 
 function Trail({ events, error, onRetry }: { events: SignEvent[] | undefined; error: unknown; onRetry: () => void }) {
-  if (error) return <ErrorState error={error} onRetry={onRetry} title={tr("The trail couldn't be read")} />;
-  if (!events) return <Spinner label={tr("Loading the trail")} />;
+  if (error) return <StatePanel kind="failed" error={error} onRetry={onRetry} title={tr("The trail couldn't be read")} />;
+  if (!events) return <ListSkeleton rows={4} />;
   if (!events.length) return <p className="muted">{tr("Nothing has happened yet. Each step is recorded here once the request is sent.")}</p>;
   return (
     <ol className="sg-trail">
@@ -401,7 +401,7 @@ function Integrity({ result, at }: { result: Verify; at: number }) {
           </span>
         </div>
       )}
-      <p className="faint" style={{ fontSize: 12 }}>
+      <p className="faint" style={{ fontSize: "var(--text-xs)" }}>
         {tr("This compares fingerprints. The signed PDF carries no certificate signature to validate.")}
       </p>
     </div>
