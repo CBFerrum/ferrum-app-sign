@@ -87,6 +87,35 @@ Append-only and hash-chained; a public endpoint verifies a sealed PDF.
 </tr>
 </table>
 
+### Since 0.3.0
+
+- **Identity by a one-time code.** A request, or one signer, asks for a code sent to the signer's e-mail address or
+  phone (`verify_identity`: Email Code, Text Code) before they sign. The signing page sends it
+  (`POST /signing/{token}/code`) and confirms it (`POST /signing/{token}/verify {code}`) through the platform's
+  one-time codes: six digits, ten minutes, once, five tries, five sends an hour. The message is the template
+  `sign.signing_code` (Settings, Messages; it reads `values.code`); a text message needs a text channel set up.
+  "Code Sent" and "Identity Verified" are in the audit trail, and the certificate says how each signer was checked.
+- **Identity providers.** National electronic identity schemes and qualified signature services plug in behind
+  `ferrum_app_sign::identity::IdentityProvider` (what a provider is asked, what it returns, how the trail keeps it).
+  None ships; the module says what an Aadhaar eSign, an eIDAS (Cloud Signature Consortium) or an eID login provider
+  implements.
+- **Recipients.** Any number of signers, in order or together; a signing group whose any one member signs for all
+  (the others become Not Needed); recipients who receive a copy only (`action`: Receive a Copy) and get the sealed
+  PDF; a signer may hand their signature to someone else, saying why, when the request allows it
+  (`allow_reassign`; `POST /signing/{token}/reassign {name, email, reason}`); reminders per request
+  (`reminder_every_days`, `max_reminders`, else Sign Settings').
+- **Sign from any record.** A Sign Request made with `send_on_create` is sent as soon as it is made: from the records
+  API, from the `sign.sign_request.create` capability (a configured button or transition: `generate` a document,
+  then `invoke` with `document: results[0].url` and `source_sha256: results[0].sha256`, its signers and
+  `reference_entity`/`reference_id`), or from `ferrum_app_sign::send_for_signature`. The file must have that digest.
+  Without fields of its own, a signature page is added after the last page with a box per signer. A file generated
+  in the same transaction is sent by upkeep within the minute, once it has committed. When the request completes, is
+  declined or expires, its record's update says so (an automation on Sign Request moves the record it is about:
+  `find` by `id` = `doc.reference_id`), and the events `sign.request_completed`, `sign.request_declined` and
+  `sign.request_expired` carry the record.
+- **What kind of signature.** The certificate says it in plain words: a simple electronic signature with an audit
+  trail, not an advanced or qualified one and not a PAdES digital signature.
+
 ## Screenshots
 
 <picture>
@@ -267,6 +296,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.3.0** | One-time codes before signing; an identity provider interface; signing groups, copy-only recipients, handing a signature over, reminders per request; sending from any record with a signature page added; the kind of signature on the certificate. |
 | **0.2.19** | Rebuilt on the tuned design system: better menu icons, a lighter first page, a visible scroll cue, cleaner print. |
 | **0.2.18** | The redesigned interface: the upgraded design system, shaped loading, told-apart states. |
 | **0.2.17** | Its reports' names in Arabic and Hindi. |

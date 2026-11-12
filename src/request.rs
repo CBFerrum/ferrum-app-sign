@@ -35,10 +35,35 @@ pub fn sequential(doc: &Doc) -> bool {
     s(doc, "signing_mode") != Some("Parallel")
 }
 
+/// A recipient who only receives the signed copy.
+pub fn copy_only(signer: &Doc) -> bool {
+    s(signer, "action") == Some("Receive a Copy")
+}
+
+/// Whether every signer has signed, or is not needed because another of their group signed (and one signed).
+pub fn signed_by_all(doc: &Doc) -> bool {
+    let signing: Vec<Doc> = rows(doc, "signers").into_iter().filter(|r| !copy_only(r)).collect();
+    signing.iter().any(|r| s(r, "status") == Some("Signed")) && signing.iter().all(|r| matches!(s(r, "status"), Some("Signed" | "Not Needed")))
+}
+
+/// The one-time code a signer confirms before signing, when one is asked: `email` or `text`.
+pub fn code_channel(request: &Doc, signer: &Doc) -> Option<&'static str> {
+    let asked = match s(signer, "verify_identity") {
+        Some("As Request") | None => s(request, "verify_identity"),
+        own => own,
+    };
+    match asked {
+        Some("Email Code") => Some("email"),
+        Some("Text Code") => Some("text"),
+        _ => None,
+    }
+}
+
 /// Signers who may sign now: everyone who has not signed in parallel mode; in sequential mode
-/// those with the lowest order among them (equal orders sign in parallel).
+/// those with the lowest order among them (equal orders sign in parallel). Copy-only recipients never.
 pub fn turn(doc: &Doc) -> Vec<Doc> {
-    let pending: Vec<Doc> = rows(doc, "signers").into_iter().filter(|r| !matches!(s(r, "status"), Some("Signed" | "Declined"))).collect();
+    let pending: Vec<Doc> =
+        rows(doc, "signers").into_iter().filter(|r| !copy_only(r) && !matches!(s(r, "status"), Some("Signed" | "Declined" | "Not Needed"))).collect();
     if !sequential(doc) {
         return pending;
     }
@@ -69,6 +94,7 @@ impl DocHook for RequestHook {
         if !doc.contains_key("created_at") && s(doc, "sender_email").is_none() && !hc.ctx.user.is_nil() {
             doc.insert("sender_email".into(), json!(hc.ctx.email.to_lowercase()));
         }
+
         // Access codes are kept only as Argon2id hashes.
         if let Some(Value::Array(signers)) = doc.get_mut("signers") {
             for (i, row) in signers.iter_mut().enumerate() {
@@ -82,6 +108,9 @@ impl DocHook for RequestHook {
                 }
                 r.insert("access_code".into(), Value::Null);
             }
+        }
+        if crate::b(doc, "send_on_create") && rows(doc, "fields").is_empty() {
+            return crate::envelope::prepare(hc, doc).await;
         }
         document::derive(hc, doc).await
     }
@@ -103,6 +132,11 @@ impl DocHook for RequestHook {
     }
 
     async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
+        // Sent as soon as its document is ready (see envelope.rs).
+        if crate::b(doc, "send_on_create") && status(doc) == "Draft" && !rows(doc, "fields").is_empty() {
+            send(hc, doc).await?;
+            return Ok(());
+        }
         match old {
             Some(old) if !hc.ctx.is_system && status(old) != "Draft" => corrections(hc, doc, old).await,
             _ => Ok(()),
@@ -178,7 +212,7 @@ pub async fn check_reference(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc, erro
 fn check_sendable(doc: &Doc) -> Vec<FieldError> {
     let mut errors = Vec::new();
     let signers = rows(doc, "signers");
-    if signers.is_empty() {
+    if signers.iter().all(copy_only) {
         errors.push(FieldError::new("signers", "add at least one signer"));
     }
     if document::page_sizes(doc).is_none() {
@@ -190,6 +224,12 @@ fn check_sendable(doc: &Doc) -> Vec<FieldError> {
             if s(sg, f).is_none() {
                 errors.push(FieldError::new(f, "is needed to send the request").in_row("signers", i));
             }
+        }
+        if copy_only(sg) {
+            continue;
+        }
+        if code_channel(doc, sg) == Some("text") && s(sg, "phone").is_none() {
+            errors.push(FieldError::new("phone", "is needed for a code by text message").in_row("signers", i));
         }
         let role = role_key(s(sg, "role").unwrap_or_default());
         let signs =
@@ -213,7 +253,7 @@ fn not_expired(doc: &Doc) -> Result<()> {
     }
 }
 
-async fn send(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
+pub(crate) async fn send(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     let (k, ctx) = (hc.kernel, hc.ctx);
     if status(doc) != "Draft" {
         return Err(Error::invalid("only draft requests can be sent"));

@@ -51,6 +51,9 @@ impl Site for SignSite {
             },
             ("POST", ["signing", t, "sign"]) => signing::sign(k, tenant, t, &client, &req.body).await?.into_response(),
             ("POST", ["signing", t, "decline"]) => signing::decline(k, tenant, t, &client, &req.body).await?.into_response(),
+            ("POST", ["signing", t, "code"]) => signing::send_code(k, tenant, t, &client).await?.into_response(),
+            ("POST", ["signing", t, "verify"]) => signing::confirm_code(k, tenant, t, &client, &req.body).await?.into_response(),
+            ("POST", ["signing", t, "reassign"]) => signing::reassign(k, tenant, t, &client, &req.body).await?.into_response(),
             ("POST", ["verify"]) => SiteResponse::json(200, &signing::verify_presented(k, tenant, &req.body).await?),
             _ => return Err(Error::NotFound("endpoint".into())),
         };

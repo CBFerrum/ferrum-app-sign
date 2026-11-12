@@ -74,9 +74,17 @@
     - {name: name, type: data, max_length: 140, in_list: true}
     - {name: email, type: email, in_list: true}
     - {name: signing_order, type: int, label: Order, default: 1, min: 1, max: 50, in_list: true, description: "Sequential requests go to lower numbers first; equal numbers sign in parallel"}
+    - {name: action, type: select, options: [Sign, Receive a Copy], default: Sign, in_list: true, description: "A recipient who receives a copy signs nothing and gets the signed PDF when everyone has signed"}
+    - {name: signing_group, type: data, max_length: 60, description: "Signers with the same group: any one of them signs for all of them"}
+    - {name: phone, type: phone, description: "For a code sent by text message"}
+    - {name: verify_identity, type: select, options: [As Request, None, Email Code, Text Code], default: As Request,
+       description: "Before signing, the signer confirms a one-time code sent to their e-mail address or phone (As Request: the request's setting)"}
     - {name: access_code, type: data, max_length: 64, description: "Optional code the signer must also enter (tell them separately); kept only as a hash"}
     - {name: access_code_hash, type: data, read_only: true, hidden: true, no_copy: true}
-    - {name: status, type: select, options: [Waiting, Sent, Viewed, Signed, Declined], default: Waiting, read_only: true, no_copy: true, in_list: true}
+    - {name: status, type: select, options: [Waiting, Sent, Viewed, Signed, Declined, Not Needed], default: Waiting, read_only: true, no_copy: true, in_list: true}
+    - {name: identity_verified_at, type: datetime, read_only: true, no_copy: true}
+    - {name: identity_channel, type: data, read_only: true, no_copy: true, description: "Where the code they confirmed was sent: email or text"}
+    - {name: reassigned_from, type: text, read_only: true, no_copy: true, description: "Who this signer took over from, and why"}
     - {name: sent_at, type: datetime, read_only: true, no_copy: true}
     - {name: viewed_at, type: datetime, read_only: true, no_copy: true}
     - {name: signed_at, type: datetime, read_only: true, no_copy: true, in_list: true}
@@ -112,6 +120,14 @@
     - {name: page_count, type: int, read_only: true, no_copy: true}
     - {name: page_sizes, type: json, read_only: true, hidden: true, no_copy: true, description: "[[width, height], ...] of each page as displayed, in points"}
     - {name: signing_mode, type: select, options: [Sequential, Parallel], default: Sequential, required: true, in_filter: true}
+    - {name: verify_identity, type: select, options: [None, Email Code, Text Code], default: None,
+       description: "Every signer confirms a one-time code sent to their e-mail address or phone before signing (a signer's own setting wins)"}
+    - {name: allow_reassign, type: check, description: "A signer may hand their signature over to someone else, saying why"}
+    - {name: reminder_every_days, type: int, min: 0, max: 60, description: "Reminders for this request (empty: Sign Settings')"}
+    - {name: max_reminders, type: int, min: 0, max: 20, description: "Reminders per signer for this request at most (empty: Sign Settings')"}
+    - {name: send_on_create, type: check, no_copy: true, description: "Sent as soon as it is made (from another record's button or step); without fields of its own, a signature page is added for its signers"}
+    - {name: source_sha256, type: data, label: Source SHA-256, max_length: 64, no_copy: true, description: "The SHA-256 the document was generated with: it is sent only if the file is that one"}
+    - {name: signature_page, type: int, read_only: true, no_copy: true, description: "The page Sign added for the signatures, when it added one"}
     - {name: expires_on, type: date, in_list: true, description: "Last day to sign, in the workspace's time zone; empty = Sign Settings' link expiry after sending"}
     - {name: expires_at, type: datetime, read_only: true, no_copy: true, description: "The moment signing links stop working (the end of the expiry day)"}
     - {name: reference_entity, type: data, max_length: 64, in_filter: true, description: "The record this request is about, e.g. Quotation"}
@@ -146,6 +162,7 @@
     - {name: verify, label: Verify Integrity, permission: read, condition: "doc.status != 'Draft'"}
   form:
     - {label: Request, fields: [title, status, signing_mode, expires_on, message]}
+    - {label: Signers' Identity and Reminders, collapsible: true, fields: [verify_identity, allow_reassign, reminder_every_days, max_reminders]}
     - {label: Document, fields: [document, document_name, page_count, document_sha256]}
     - {label: Signers, fields: [signers]}
     - {label: Fields, fields: [fields]}
@@ -164,7 +181,7 @@
     - {name: request, type: link, to: SignRequest, required: true, on_delete: cascade, in_list: true, in_filter: true}
     - {name: seq, type: int, label: No., required: true, in_list: true}
     - {name: event, type: select, required: true, in_list: true, in_filter: true,
-       options: [Sent, Viewed, Signed, Declined, Reminded, Resent, Corrected, Access Denied, Voided, Expired, Completed]}
+       options: [Sent, Viewed, Signed, Declined, Reminded, Resent, Corrected, Access Denied, Voided, Expired, Completed, Code Sent, Identity Verified, Reassigned, Not Needed]}
     - {name: occurred_at, type: datetime, label: Time, required: true, in_list: true}
     - {name: role, type: data, max_length: 60}
     - {name: signer_name, type: data, max_length: 140}

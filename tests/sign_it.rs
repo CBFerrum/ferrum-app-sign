@@ -168,6 +168,37 @@ impl MemStore {
     }
 }
 
+/// A PDF service standing in for Gotenberg: every page it is sent comes back as a two-page PDF.
+async fn fake_pdf_renderer() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = sock.read(&mut chunk).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+                let head = String::from_utf8_lossy(&buf[..end]).to_lowercase();
+                let len: usize = head.lines().find_map(|l| l.strip_prefix("content-length:")).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+                if buf.len() >= end + 4 + len {
+                    break;
+                }
+            }
+            let body = contract_pdf("Generated quote");
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let _ = sock.write_all(head.as_bytes()).await;
+            let _ = sock.write_all(&body).await;
+        }
+    });
+    format!("http://{addr}")
+}
+
 // ───────────────────────────── harness ─────────────────────────────
 
 struct T {
@@ -390,7 +421,8 @@ async fn scenario() {
     for source in ferrum_app_sign::reports() {
         ferrum_domain::reports::add_source(source);
     }
-    let settings = KernelSettings { secret_key: Some(ferrum_kernel::secret::SecretKey::new([9u8; 32])), ..Default::default() };
+    let settings =
+        KernelSettings { secret_key: Some(ferrum_kernel::secret::SecretKey::new([9u8; 32])), pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
@@ -935,6 +967,146 @@ async fn scenario() {
     assert_eq!(waiting.get("bo@b.test"), Some(&2), "Deal and Gift Deed");
     assert_eq!(waiting.get("jane@client.test"), Some(&1), "the request from the template");
     refused(ferrum_domain::reports::run(&t.k, &nobody, "sign_pending_signatures", &HashMap::new()).await, "forbidden");
+
+    // ───────────── identity by a one-time code (DC-40) ─────────────
+    let by_text = json!({"title": "Guarantee", "document": t.upload(&asha, "g.pdf", &pdf).await,
+        "signers": [{"role": "Guarantor", "name": "Gus", "email": "gus@loan.test", "verify_identity": "Text Code"}],
+        "fields": [field("Guarantor", "Signature", "G", 1, 72, 600, 200, 50)]});
+    let by_text = uid(&t.k.insert(&asha, "SignRequest", obj(by_text)).await.unwrap());
+    assert!(refused(t.k.run_action(&asha, "SignRequest", by_text, "send", json!({})).await, "invalid").contains("code by text message"));
+    let loan = json!({"title": "Loan agreement", "document": t.upload(&asha, "loan.pdf", &pdf).await, "verify_identity": "Email Code",
+        "signers": [{"role": "Borrower", "name": "Bea Borrower", "email": "bea@loan.test"}],
+        "fields": [field("Borrower", "Signature", "B", 1, 72, 600, 200, 50)]});
+    let loan_id = uid(&t.k.insert(&asha, "SignRequest", obj(loan)).await.unwrap());
+    let sent = t.action(&asha, loan_id, "send", json!({})).await;
+    let bea = token_of(sent["signers"][0]["url"].as_str().unwrap());
+    let (_, seen) = t.view(&acme, &bea, None).await.unwrap();
+    assert_eq!(seen["identity"], json!({"code": "email", "verified": false}));
+    let signs = json!({"consent": true, "signature": {"text": "Bea Borrower"}});
+    assert!(refused(t.sign(&acme, &bea, None, signs.clone()).await, "forbidden").contains("confirm the code"));
+    let (status, said) = t.json(&acme, "POST", &format!("/signing/{bea}/code"), None, None).await.unwrap();
+    assert_eq!((status, said["channel"].as_str()), (200, Some("email")));
+    let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+    let mail: String =
+        sqlx::query_scalar("select payload::text from outbox where tenant_id = $1 and payload::text like '%bea@loan.test%' order by created_at desc limit 1")
+            .bind(acme.id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    tx.commit().await.unwrap();
+    let at = mail.find("<strong>").expect("the code in the mail") + "<strong>".len();
+    let code: String = mail[at..].chars().take(6).collect();
+    assert!(code.chars().all(|c| c.is_ascii_digit()), "{code}");
+    let wrong = if code == "000000" { "111111" } else { "000000" };
+    refused(t.json(&acme, "POST", &format!("/signing/{bea}/verify"), None, Some(json!({"code": wrong}))).await, "forbidden");
+    let (_, ok) = t.json(&acme, "POST", &format!("/signing/{bea}/verify"), None, Some(json!({"code": code}))).await.unwrap();
+    assert_eq!(ok["verified"], json!(true));
+    let (_, done) = t.sign(&acme, &bea, None, signs).await.unwrap();
+    assert_eq!(done["request_status"], json!("Completed"));
+    let trail = t.trail(&acme, loan_id).await;
+    assert!(trail.iter().any(|e| e == "Code Sent:Borrower") && trail.iter().any(|e| e == "Identity Verified:Borrower"), "{trail:?}");
+    assert_eq!(signer_row(&t.get(&asha, "SignRequest", loan_id).await, "Borrower")["identity_channel"], json!("email"));
+
+    // ───────────── a group, a copy, and a signature handed over (DC-38, DC-45, DC-46) ─────────────
+    let board = json!({"title": "Board consent", "document": t.upload(&asha, "board.pdf", &pdf).await, "allow_reassign": true,
+        "signers": [
+            {"role": "Director A", "name": "Dee", "email": "dee@board.test", "signing_order": 1, "signing_group": "Directors"},
+            {"role": "Director B", "name": "Dan", "email": "dan@board.test", "signing_order": 1, "signing_group": "Directors"},
+            {"role": "Secretary", "name": "Sec", "email": "sec@board.test", "signing_order": 2},
+            {"role": "Auditor", "name": "Aud", "email": "aud@board.test", "action": "Receive a Copy"}],
+        "fields": [field("Director A", "Signature", "DA", 1, 72, 100, 200, 50), field("Director B", "Signature", "DB", 1, 320, 100, 200, 50),
+                   field("Secretary", "Signature", "S", 1, 72, 300, 200, 50)]});
+    let board_id = uid(&t.k.insert(&asha, "SignRequest", obj(board)).await.unwrap());
+    let sent = t.action(&asha, board_id, "send", json!({})).await;
+    let asked: Vec<&str> = sent["signers"].as_array().unwrap().iter().map(|l| l["role"].as_str().unwrap()).collect();
+    assert_eq!(asked, ["Director A", "Director B"], "the group together; the copy is never asked to sign");
+    let link = |role: &str| token_of(sent["signers"].as_array().unwrap().iter().find(|l| l["role"] == json!(role)).unwrap()["url"].as_str().unwrap());
+    let (dee, dan) = (link("Director A"), link("Director B"));
+    let handover = json!({"name": "Dora", "email": "dora@board.test", "reason": "Dan is away"});
+    let (_, moved) = t.json(&acme, "POST", &format!("/signing/{dan}/reassign"), None, Some(handover)).await.unwrap();
+    assert_eq!(moved["reassigned"], json!(true));
+    refused(t.view(&acme, &dan, None).await, "not found");
+    let b = signer_row(&t.get(&asha, "SignRequest", board_id).await, "Director B");
+    assert_eq!(b["email"], json!("dora@board.test"));
+    assert!(b["reassigned_from"].as_str().unwrap().contains("Dan <dan@board.test>: Dan is away"));
+    t.sign(&acme, &dee, None, json!({"consent": true, "signature": {"text": "Dee"}})).await.unwrap();
+    let after = t.get(&asha, "SignRequest", board_id).await;
+    assert_eq!((signer_row(&after, "Director B")["status"].clone(), signer_row(&after, "Secretary")["status"].clone()), (json!("Not Needed"), json!("Sent")));
+    let key = t.key(&acme).await;
+    let sec = token_for(&key, acme.id, board_id, uid(&signer_row(&after, "Secretary")), "sec@board.test");
+    let (_, done) = t.sign(&acme, &sec, None, json!({"consent": true, "signature": {"text": "Sec"}})).await.unwrap();
+    assert_eq!(done["request_status"], json!("Completed"), "the group signed once, the secretary after");
+    assert!(t.trail(&acme, board_id).await.iter().any(|e| e == "Reassigned:Director B" || e == "Not Needed:Director B"));
+    assert_eq!(signer_row(&t.get(&asha, "SignRequest", board_id).await, "Auditor")["signed_at"], Value::Null);
+
+    // ───────────── a request's own reminders (DC-49) ─────────────
+    let quiet = json!({"title": "Quiet", "document": t.upload(&asha, "q.pdf", &pdf).await, "reminder_every_days": 0,
+        "signers": [{"role": "Q", "name": "Quinn", "email": "quinn@q.test"}], "fields": [field("Q", "Signature", "Q", 1, 72, 600, 200, 50)]});
+    let quiet_id = uid(&t.k.insert(&asha, "SignRequest", obj(quiet)).await.unwrap());
+    t.action(&asha, quiet_id, "send", json!({})).await;
+    t.sql(&acme, "update e_sign_request__signers set sent_at = now() - interval '5 days' where tenant_id = $1 and parent_id = $2", quiet_id).await.unwrap();
+    t.maintenance().await;
+    assert_eq!(t.count(&acme, quiet_id, "Reminded").await, 0, "its own setting: no reminders, though the workspace reminds daily");
+
+    // ───────────── a workspace's own record sent for signature by configuration only (DC-47) ─────────────
+    let quote = json!({"name": "XQuote", "label": "Quote", "kind": "master", "title_field": "title", "fields": [
+        {"name": "title", "type": "data", "required": true}, {"name": "customer", "type": "data"}, {"name": "customer_email", "type": "email"},
+        {"name": "status", "type": "select", "options": ["Open", "Out for Signature", "Signed"], "default": "Open"}]});
+    let send_it = json!({"name": "x_send_to_sign", "label": "Send to Sign", "permission": "write", "effects": [
+        {"type": "generate", "template": "x_quote.letter"},
+        {"type": "invoke", "capability": "sign.sign_request.create", "input": {"values":
+            "{'title': doc.title, 'document': results[0].url, 'source_sha256': results[0].sha256, 'send_on_create': true, 'reference_entity': 'XQuote', \
+              'reference_id': doc.id, 'signers': [{'role': 'Customer', 'name': doc.customer, 'email': doc.customer_email}]}"}},
+        {"type": "set_fields", "values": {"status": "'Out for Signature'"}}]});
+    let custom = |op: Value| -> ferrum_kernel::customize::NewCustomization { serde_json::from_value(json!({"entity": "XQuote", "op": op})).unwrap() };
+    t.k.batch_customizations(&acme.admin, vec![custom(json!({"op": "define_entity", "entity": quote}))], false).await.map_err(|(_, e)| e).expect("the entity");
+    // The administrator again, with the workspace's schema as it now is.
+    let session = t.k.login("acme", "admin@acme.test", PASSWORD).await.expect("login");
+    let admin = t.k.load_ctx(acme.id, session.user, Some(session.token_version), "it".into()).await.expect("ctx");
+    let letter: ferrum_meta::DocumentDef =
+        serde_json::from_value(json!({"key": "x_quote.letter", "label": "Quote letter", "entity": "XQuote", "output": "page",
+        "languages": {"en": {"body": "<h1>{{ doc.title }}</h1><p>For {{ doc.customer }}</p>"}}}))
+        .unwrap();
+    t.k.save_document_template(&admin, &letter).await.expect("its letter");
+    t.k.batch_customizations(&admin, vec![custom(json!({"op": "add_action", "action": send_it}))], false).await.map_err(|(_, e)| e).expect("its button");
+    let session = t.k.login("acme", "admin@acme.test", PASSWORD).await.expect("login");
+    let admin = t.k.load_ctx(acme.id, session.user, Some(session.token_version), "it".into()).await.expect("ctx");
+    ferrum_kernel::automation::save(
+        &t.k,
+        &admin,
+        &obj(json!({"name": "Quotes signed", "entity": "SignRequest", "event": "updated",
+            "condition": "doc.status == 'Completed' && doc.reference_entity == 'XQuote'",
+            "actions": [{"type": "find", "entity": "XQuote", "by": {"id": "doc.reference_id"}, "update": {"status": "'Signed'"}}]})),
+    )
+    .await
+    .expect("the record moves when it is signed");
+    let q = t.k.insert(&admin, "XQuote", obj(json!({"title": "Quote Q-7", "customer": "Cora Client", "customer_email": "cora@client.test"}))).await.unwrap();
+    let q_id = uid(&q);
+    t.k.run_action(&admin, "XQuote", q_id, "x_send_to_sign", Value::Null).await.expect("sent by its button");
+    // Its file was generated in the button's own transaction: upkeep adds the page and sends it once that commits.
+    t.maintenance().await;
+    assert_eq!(t.get(&admin, "XQuote", q_id).await["status"], json!("Out for Signature"));
+    let made = t.list(&mira, "SignRequest", json!({"reference_entity": "XQuote", "reference_id": q_id.to_string()})).await;
+    assert_eq!(made.len(), 1);
+    let req = t.get(&mira, "SignRequest", uid(&made[0])).await;
+    assert_eq!(
+        (req["status"].clone(), req["page_count"].clone(), req["signature_page"].clone()),
+        (json!("Sent"), json!(3), json!(3)),
+        "a signature page added"
+    );
+    assert_eq!(req["fields"].as_array().unwrap().iter().map(|f| (f["role"].clone(), f["page"].clone())).collect::<Vec<_>>(), [(json!("Customer"), json!(3))]);
+    let cora = token_for(&key, acme.id, uid(&req), uid(&signer_row(&req, "Customer")), "cora@client.test");
+    let (_, done) = t.sign(&acme, &cora, None, json!({"consent": true, "signature": {"text": "Cora Client"}})).await.unwrap();
+    assert_eq!(done["request_status"], json!("Completed"));
+    let events: i64 =
+        t.scalar(&acme, "select count(*) from outbox where tenant_id = $1 and topic = 'sign.request_completed' and record_id = $2", uid(&req)).await;
+    assert_eq!(events, 1, "the event carries the record it is about");
+    while t.k.dispatch_outbox_once().await.unwrap_or(0) > 0 {}
+    assert_eq!(t.get(&admin, "XQuote", q_id).await["status"], json!("Signed"), "moved by the workspace's automation");
+    // The digest names the file generated: another file is refused.
+    let other = json!({"title": "Swapped", "document": t.upload(&asha, "x.pdf", &pdf).await, "source_sha256": "00".repeat(32), "send_on_create": true,
+        "signers": [{"role": "C", "name": "C", "email": "c@x.test"}]});
+    assert!(refused(t.k.insert(&asha, "SignRequest", obj(other)).await, "invalid").contains("not the one generated"));
 
     // ───────────── a workspace with Mail: links and sealed copies are emailed ─────────────
     let globex = t.tenant("globex", &["sign", "comms"], "UTC").await;
