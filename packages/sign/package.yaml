@@ -1,5 +1,5 @@
 package: sign
-version: 0.1.1
+version: 0.2.0
 label: Sign
 description: Electronic signatures - send PDFs for signing in order or in parallel, place fields per signer, sign by secure link, sealed PDFs with an audit certificate and a hash-chained audit trail.
 depends: [core]
@@ -31,3 +31,21 @@ personal_data:
   - {entity: SignRequest, match: sender_email, retain: "Evidence of the signature: erasing it would undo what was signed"}
 handover:
   - {entity: SignRequest, field: sender_email, where: {status: [Draft, Sent, In Progress]}}
+
+# A signer's one-time code (Kernel::send_code): e-mail and text bodies, each reading values.code.
+messages:
+  - key: sign.signing_code
+    label: Signing code
+    category: operational
+    values: [code]
+    languages:
+      en:
+        email: {subject: "Your code to sign a document", body: "<p>Your code to sign the document you opened is <strong>{{ values.code }}</strong>. It works once, for ten minutes.</p>"}
+        text: {text: "Your code to sign the document you opened: {{ values.code }}. It works once, for ten minutes."}
+
+# What a request about another record says when it ends, for processes to wait on (the request's own
+# update says it too, for automations): {request, status, reference_entity, reference_id, sealed_document}.
+events:
+  - {name: request_completed, label: Signature request completed, entity: SignRequest, description: "Everyone signed; the sealed PDF is on the request"}
+  - {name: request_declined, label: Signature request declined, entity: SignRequest}
+  - {name: request_expired, label: Signature request expired, entity: SignRequest}

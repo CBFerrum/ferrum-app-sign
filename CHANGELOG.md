@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0
+
+Closes the documents audit's tier-1 rows for Sign (DC-38, DC-40, DC-43 in words, DC-47) and DC-45, DC-46, DC-49.
+
+* **One-time codes.** `verify_identity` on a request (None, Email Code, Text Code) and on a signer (As Request by
+  default), a signer's `phone`; the endpoints `POST /signing/{token}/code` and `/verify`; the message template
+  `sign.signing_code`; `identity_verified_at` and `identity_channel` on the signer; trail events Code Sent and Identity
+  Verified; signing refused until the code is confirmed; the certificate says how each signer was checked.
+* **Identity providers**: the interface `identity::IdentityProvider` (`Ask`, `Start`, `Outcome`, `trail_details`), no
+  provider.
+* **Recipients.** Signer `action` (Sign, Receive a Copy), `signing_group` (any one signs; the others Not Needed);
+  request `allow_reassign` and `POST /signing/{token}/reassign` (`reassigned_from`, trail event Reassigned); reminders
+  per request (`reminder_every_days`, `max_reminders`).
+* **Sign from any record.** `send_on_create`, `source_sha256` and `signature_page` on Sign Request; a signature page
+  added when a request has no fields; `send_for_signature`; upkeep sends a request whose file was generated in the
+  same transaction; package events `request_completed`, `request_declined`, `request_expired`.
+* **The kind of signature** on the certificate.
+* Upkeep: expiry and sealing count a group member not needed and a copy-only recipient as done.
+
 ## 0.2.19
 
 Rebuilt with Ferrum-Frontend 45dad7f, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.

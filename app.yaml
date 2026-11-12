@@ -1,6 +1,6 @@
 id: sign
 name: Sign
-version: 0.2.19
+version: 0.3.0
 publisher: cbferrum
 summary: "Electronic signatures: send PDFs for signing in order, place fields, sign by secure link, sealed PDFs with an audit trail and certificate"
 description: README.md
@@ -42,7 +42,10 @@ contributes:
       instructions: >-
         A SignRequest sends a PDF for signing: Draft, Sent, In Progress, Completed, Declined, Expired or Voided. Each
         signer (SignRequestSigner) is Waiting until their turn, then Sent, Viewed, Signed or Declined, in order.
-        SignEvent is the audit trail, and a completed request has a sealed PDF with its certificate.
+        SignEvent is the audit trail, and a completed request has a sealed PDF with its certificate. A signer may have to
+        confirm a one-time code (verify_identity), belong to a signing group (any one signs, the others are Not
+        Needed) or only receive a copy (action). A request with reference_entity and reference_id is about another
+        record, and may have been sent from it (send_on_create).
       suggestions:
         - "Which documents wait for signatures?"
         - "Who has not signed yet?"
