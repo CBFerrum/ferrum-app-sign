@@ -87,6 +87,9 @@ Append-only and hash-chained; a public endpoint verifies a sealed PDF.
 </tr>
 </table>
 
+### What an operator must configure for signing
+Sign signs PDFs only. Without a PDF service (`FERRUM_PDF_URL`, the Gotenberg-style renderer the platform's documents use) a generated page is HTML, and Sign refuses it: upload PDFs, or set the service up. A one-time code by text message needs a text channel in the workspace's message settings; by e-mail, the workspace's mail. Codes are sealed in the outbox and delivery log; tests read them from the platform's test channel.
+
 ### Since 0.3.0
 
 - **Identity by a one-time code.** A request, or one signer, asks for a code sent to the signer's e-mail address or
@@ -296,6 +299,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.3.1** | A generated page (a server with no PDF service) is refused when a button sends it for signature, in that button's own transaction, so the record keeps its status; the refusal names `FERRUM_PDF_URL`; a request upkeep cannot send raises `sign.request_failed`. |
 | **0.3.0** | One-time codes before signing; an identity provider interface; signing groups, copy-only recipients, handing a signature over, reminders per request; sending from any record with a signature page added; the kind of signature on the certificate. |
 | **0.2.19** | Rebuilt on the tuned design system: better menu icons, a lighter first page, a visible scroll cue, cleaner print. |
 | **0.2.18** | The redesigned interface: the upgraded design system, shaped loading, told-apart states. |

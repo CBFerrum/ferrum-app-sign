@@ -49,3 +49,4 @@ events:
   - {name: request_completed, label: Signature request completed, entity: SignRequest, description: "Everyone signed; the sealed PDF is on the request"}
   - {name: request_declined, label: Signature request declined, entity: SignRequest}
   - {name: request_expired, label: Signature request expired, entity: SignRequest}
+  - {name: request_failed, label: Signature request could not be sent, entity: SignRequest}

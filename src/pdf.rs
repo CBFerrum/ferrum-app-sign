@@ -29,13 +29,17 @@ pub struct PageSize {
     pub height: f64,
 }
 
+/// What a person is told about a file that is not a PDF: a generated page document is HTML where the server has no
+/// PDF service, and Sign signs PDFs only.
+pub const NOT_A_PDF: &str = "the file is not a PDF. A page made on a server without a PDF service (FERRUM_PDF_URL) is HTML, which Sign cannot sign: set that service up, or upload a PDF";
+
 /// Opens a PDF that can be signed: `%PDF-` magic, a successful parse, no encryption.
 pub fn load(bytes: &[u8]) -> Result<Document, String> {
     if bytes.len() > MAX_BYTES {
         return Err(format!("the PDF is larger than {} MB", MAX_BYTES >> 20));
     }
     if !bytes.starts_with(b"%PDF-") {
-        return Err("the file is not a PDF".into());
+        return Err(NOT_A_PDF.into());
     }
     let options = LoadOptions { max_decompressed_size: Some(MAX_INFLATE), ..Default::default() };
     let doc = Document::load_mem_with_options(bytes, options).map_err(|e| format!("the PDF cannot be read ({e})"))?;

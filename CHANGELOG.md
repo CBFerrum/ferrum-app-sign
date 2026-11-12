@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.1
+
+* **A page cannot start a signature, and the press is refused whole.** Sign needs a PDF, and a server with no PDF
+  service (`FERRUM_PDF_URL`) generates a page (HTML). A configured button that generates a document, sends it with
+  `sign.sign_request.create` and sets the record's status used to commit the status and leave a request that
+  upkeep then could not send ("not a PDF"). The request now refuses a generated page in the button's own
+  transaction, so the record keeps its status and no request or file is left. A file that is not a PDF is refused
+  with a message naming the missing service. A request that still cannot be sent at upkeep tells its sender, as
+  before, and now also raises the event `sign.request_failed` (request, number, reason, the record it is about).
+* Tests: the one-time code is read from the platform's test channel (a code by text message), and the suite
+  confirms a signer with the right code, refuses a wrong one, an expired one and a sixth try, and a code used once.
+
 ## 0.3.0
 
 Closes the documents audit's tier-1 rows for Sign (DC-38, DC-40, DC-43 in words, DC-47) and DC-45, DC-46, DC-49.
