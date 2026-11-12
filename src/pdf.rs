@@ -602,6 +602,65 @@ fn append_certificate(signed: Vec<u8>, paras: &[Para], size: PageSize, footer: &
     Ok(out)
 }
 
+// ───────────────────────────── a signature page ─────────────────────────────
+
+/// Where the `n`th signer's signature box (from 0) sits on a signature page of width `width`: two columns, rows
+/// 110 points apart from 150 points down, each box 200 by 50, in points from the top left.
+pub fn signature_box(n: usize, width: f64) -> (f64, f64) {
+    let x = if n.is_multiple_of(2) { 72.0 } else { (width / 2.0).max(300.0) };
+    (x, 150.0 + (n / 2) as f64 * 110.0)
+}
+
+/// Signers one signature page holds.
+pub const SIGNATURE_PAGE_HOLDS: usize = 12;
+
+/// `original` with a page added at its end, the size of its last page, a box for each of `labels` (who signs there)
+/// where [`signature_box`] places it. Added as an incremental update: the original's bytes stay its prefix.
+pub fn with_signature_page(original: Vec<u8>, labels: &[String], size: PageSize) -> Result<Vec<u8>, String> {
+    if labels.len() > SIGNATURE_PAGE_HOLDS {
+        return Err(format!("a signature page holds {SIGNATURE_PAGE_HOLDS} signers"));
+    }
+    let fail = |e: lopdf::Error| format!("the signature page could not be added ({e})");
+    let prev = load(&original)?;
+    let root = prev.catalog().and_then(|c| c.get(b"Pages")).and_then(Object::as_reference).map_err(fail)?;
+    let existing_pages = prev.get_pages().len();
+    let kids_ref = prev.get_dictionary(root).and_then(|d| d.get(b"Kids")).and_then(Object::as_reference).ok();
+    let mut inc = IncrementalDocument::create_from(original, prev);
+    inc.opt_clone_object_to_new_document(root).map_err(fail)?;
+    if let Some(k) = kids_ref {
+        inc.opt_clone_object_to_new_document(k).map_err(fail)?;
+    }
+    let font = inc.new_document.add_object(font_dict("Helvetica"));
+    let mut content = String::new();
+    for (n, label) in labels.iter().enumerate() {
+        let (x, top) = signature_box(n, size.width);
+        let text: String = label.chars().take(60).collect();
+        content.push_str(&format!("BT /F1 9 Tf 0 g {} {} Td <{}> Tj ET\n", num(x), num(size.height - top + 4.0), hex::encode(encode(&text))));
+        content.push_str(&format!("0.5 w {} {} m {} {} l S\n", num(x), num(size.height - top - 50.0), num(x + 200.0), num(size.height - top - 50.0)));
+    }
+    let contents = inc.new_document.add_object(compressed(Dictionary::new(), content.into_bytes()));
+    let mut fonts = Dictionary::new();
+    fonts.set("F1", font);
+    let mut resources = Dictionary::new();
+    resources.set("Font", fonts);
+    let mut page = Dictionary::new();
+    page.set("Type", Object::Name(b"Page".to_vec()));
+    page.set("Parent", root);
+    page.set("MediaBox", vec![Object::Integer(0), Object::Integer(0), Object::Real(size.width as f32), Object::Real(size.height as f32)]);
+    page.set("Resources", resources);
+    page.set("Contents", contents);
+    let added = Object::Reference(inc.new_document.add_object(page));
+    let kids_array = match kids_ref {
+        Some(k) => inc.new_document.get_object_mut(k).and_then(Object::as_array_mut).map_err(fail)?,
+        None => inc.new_document.get_dictionary_mut(root).and_then(|d| d.get_mut(b"Kids")).and_then(Object::as_array_mut).map_err(fail)?,
+    };
+    kids_array.push(added);
+    inc.new_document.get_dictionary_mut(root).map_err(fail)?.set("Count", (existing_pages + 1) as i64);
+    let mut out = Vec::new();
+    inc.save_to(&mut out).map_err(|e| format!("the signature page could not be written ({e})"))?;
+    Ok(out)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -657,6 +716,18 @@ pub(crate) mod tests {
     fn page_text(doc: &Document, page: u32) -> String {
         let id = doc.get_pages()[&page];
         String::from_utf8_lossy(&doc.get_page_content(id)).to_string()
+    }
+
+    #[test]
+    fn a_signature_page_is_added_after_the_original() {
+        let original = sample(&[(612.0, 792.0, 0), (612.0, 792.0, 0)]);
+        let labels = ["Customer: Jane Doe".to_string(), "Company: Ravi".to_string(), "Witness: Ann".to_string()];
+        let out = with_signature_page(original.clone(), &labels, PageSize { width: 612.0, height: 792.0 }).unwrap();
+        assert!(out.starts_with(&original), "an incremental update: the original is its prefix");
+        assert_eq!(inspect(&out).unwrap().len(), 3);
+        assert_eq!((signature_box(0, 612.0), signature_box(1, 612.0), signature_box(2, 612.0)), ((72.0, 150.0), (306.0, 150.0), (72.0, 260.0)));
+        let many: Vec<String> = (0..13).map(|n| format!("S{n}")).collect();
+        assert!(with_signature_page(original, &many, PageSize { width: 612.0, height: 792.0 }).is_err());
     }
 
     #[test]

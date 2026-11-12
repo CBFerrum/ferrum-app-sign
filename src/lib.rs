@@ -13,7 +13,9 @@
 //!   copyable links and people get in-app notifications.
 
 mod document;
+mod envelope;
 mod event;
+pub mod identity;
 mod notice;
 mod pdf;
 mod reports;
@@ -53,6 +55,17 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("SignRequest", Arc::new(request::RequestHook))
         .register("SignEvent", Arc::new(event::EventHook))
         .add_site("sign", Arc::new(site::SignSite));
+}
+
+/// Sends `values` (a Sign Request's: `title`, `document` as a `/files/<id>` path, `source_sha256`, `signers`,
+/// `reference_entity`, `reference_id`, `message`, `verify_identity`...) for signature at once, about the record it
+/// names, as `ctx` (a person, or the system on someone's behalf). Without fields of its own, a signature page is
+/// added for its signers. Returns the request as stored. The same as creating a Sign Request with
+/// `send_on_create` (the `sign.sign_request.create` capability a configured step invokes).
+pub async fn send_for_signature(k: &Kernel, tx: &mut ferrum_kernel::Tx, ctx: &Ctx, mut values: Doc) -> Result<Doc> {
+    values.insert("send_on_create".into(), Value::Bool(true));
+    let made = k.insert_tx(ctx, tx, "SignRequest", values).await?;
+    k.get_tx(ctx, tx, "SignRequest", doc_id(&made)?, false).await
 }
 
 /// This app's reports.
