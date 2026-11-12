@@ -201,6 +201,9 @@ async fn fake_pdf_renderer() -> String {
 
 // ───────────────────────────── harness ─────────────────────────────
 
+/// The tests share one database, which each resets.
+static DB: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct T {
     k: Arc<Kernel>,
     store: Arc<MemStore>,
@@ -399,8 +402,38 @@ fn field(role: &str, kind: &str, label: &str, page: i64, x: i64, y: i64, w: i64,
     json!({"role": role, "field_type": kind, "label": label, "page": page, "x": x, "y": y, "width": w, "height": h})
 }
 
+/// A one-signer request asking for a code by text message, sent; returns it and the signer's token.
+async fn code_request(t: &T, sender: &Ctx, pdf: &[u8], who: &str, phone: &str) -> (Uuid, String) {
+    let req = json!({"title": format!("Code for {who}"), "document": t.upload(sender, &format!("{who}.pdf"), pdf).await, "verify_identity": "Text Code",
+        "signers": [{"role": "Signer", "name": who, "email": format!("{who}@loan.test"), "phone": phone}],
+        "fields": [field("Signer", "Signature", "S", 1, 72, 600, 200, 50)]});
+    let id = uid(&t.k.insert(sender, "SignRequest", obj(req)).await.unwrap());
+    let sent = t.action(sender, id, "send", json!({})).await;
+    (id, token_of(sent["signers"][0]["url"].as_str().unwrap()))
+}
+
+/// Asks for a code on the public route and reads it as a test may: from the platform's test channel, where a
+/// delivery holds it in the clear (everywhere else it is sealed).
+async fn mailed_code(t: &T, acme: &Tenant, token: &str, phone: &str) -> String {
+    let (status, _) = t.json(acme, "POST", &format!("/signing/{token}/code"), None, None).await.unwrap();
+    assert_eq!(status, 200);
+    texted_code(t, acme, phone).await
+}
+
+/// The latest code the test channel delivered to `phone`.
+async fn texted_code(t: &T, acme: &Tenant, phone: &str) -> String {
+    let mut tx = t.k.db.system_tx().await.unwrap();
+    sqlx::query("update job set run_at = now() where status = 'queued'").execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    while t.k.run_jobs_once(4).await.unwrap() > 0 {}
+    let sent = ferrum_kernel::messages::test_deliveries(acme.id).into_iter().rev().find(|d| d.0 == phone).expect("the code was delivered");
+    let text = sent.1["text"].as_str().unwrap().to_string();
+    text.split(|c: char| !c.is_ascii_digit()).find(|w| w.len() == 6).unwrap_or_else(|| panic!("no six-digit code in {text:?}")).to_string()
+}
+
 #[test]
 fn sign_end_to_end() {
+    let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
     // Same runtime shape as the server: unoptimized async hook chains need more than 2 MiB.
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
     rt.block_on(async { tokio::spawn(scenario()).await.unwrap() });
@@ -969,34 +1002,28 @@ async fn scenario() {
     refused(ferrum_domain::reports::run(&t.k, &nobody, "sign_pending_signatures", &HashMap::new()).await, "forbidden");
 
     // ───────────── identity by a one-time code (DC-40) ─────────────
+    // Codes are sealed on their way out; a test reads them from the platform's test channel.
+    let channel: ferrum_kernel::messages::ChannelInput =
+        serde_json::from_value(json!({"kind": "text", "name": "Test", "description": {"test": true}})).unwrap();
+    t.k.save_message_channel(&acme.admin, None, &channel).await.expect("test channel");
     let by_text = json!({"title": "Guarantee", "document": t.upload(&asha, "g.pdf", &pdf).await,
         "signers": [{"role": "Guarantor", "name": "Gus", "email": "gus@loan.test", "verify_identity": "Text Code"}],
         "fields": [field("Guarantor", "Signature", "G", 1, 72, 600, 200, 50)]});
     let by_text = uid(&t.k.insert(&asha, "SignRequest", obj(by_text)).await.unwrap());
     assert!(refused(t.k.run_action(&asha, "SignRequest", by_text, "send", json!({})).await, "invalid").contains("code by text message"));
-    let loan = json!({"title": "Loan agreement", "document": t.upload(&asha, "loan.pdf", &pdf).await, "verify_identity": "Email Code",
-        "signers": [{"role": "Borrower", "name": "Bea Borrower", "email": "bea@loan.test"}],
+    let loan = json!({"title": "Loan agreement", "document": t.upload(&asha, "loan.pdf", &pdf).await, "verify_identity": "Text Code",
+        "signers": [{"role": "Borrower", "name": "Bea Borrower", "email": "bea@loan.test", "phone": "+4917011111111"}],
         "fields": [field("Borrower", "Signature", "B", 1, 72, 600, 200, 50)]});
     let loan_id = uid(&t.k.insert(&asha, "SignRequest", obj(loan)).await.unwrap());
     let sent = t.action(&asha, loan_id, "send", json!({})).await;
     let bea = token_of(sent["signers"][0]["url"].as_str().unwrap());
     let (_, seen) = t.view(&acme, &bea, None).await.unwrap();
-    assert_eq!(seen["identity"], json!({"code": "email", "verified": false}));
+    assert_eq!(seen["identity"], json!({"code": "text", "verified": false}));
     let signs = json!({"consent": true, "signature": {"text": "Bea Borrower"}});
     assert!(refused(t.sign(&acme, &bea, None, signs.clone()).await, "forbidden").contains("confirm the code"));
     let (status, said) = t.json(&acme, "POST", &format!("/signing/{bea}/code"), None, None).await.unwrap();
-    assert_eq!((status, said["channel"].as_str()), (200, Some("email")));
-    let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
-    let mail: String =
-        sqlx::query_scalar("select payload::text from outbox where tenant_id = $1 and payload::text like '%bea@loan.test%' order by created_at desc limit 1")
-            .bind(acme.id)
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap();
-    tx.commit().await.unwrap();
-    let at = mail.find("<strong>").expect("the code in the mail") + "<strong>".len();
-    let code: String = mail[at..].chars().take(6).collect();
-    assert!(code.chars().all(|c| c.is_ascii_digit()), "{code}");
+    assert_eq!((status, said["channel"].as_str()), (200, Some("text")));
+    let code = texted_code(&t, &acme, "+4917011111111").await;
     let wrong = if code == "000000" { "111111" } else { "000000" };
     refused(t.json(&acme, "POST", &format!("/signing/{bea}/verify"), None, Some(json!({"code": wrong}))).await, "forbidden");
     let (_, ok) = t.json(&acme, "POST", &format!("/signing/{bea}/verify"), None, Some(json!({"code": code}))).await.unwrap();
@@ -1005,7 +1032,39 @@ async fn scenario() {
     assert_eq!(done["request_status"], json!("Completed"));
     let trail = t.trail(&acme, loan_id).await;
     assert!(trail.iter().any(|e| e == "Code Sent:Borrower") && trail.iter().any(|e| e == "Identity Verified:Borrower"), "{trail:?}");
-    assert_eq!(signer_row(&t.get(&asha, "SignRequest", loan_id).await, "Borrower")["identity_channel"], json!("email"));
+    assert_eq!(signer_row(&t.get(&asha, "SignRequest", loan_id).await, "Borrower")["identity_channel"], json!("text"));
+
+    // ───────────── the one-time code through the public routes: expired, too many tries, once only ─────────────
+    let signs = json!({"consent": true, "signature": {"text": "Signer"}});
+    let verify = |token: &str, code: &str| {
+        let (t, acme, path, body) = (&t, &acme, format!("/signing/{token}/verify"), json!({"code": code}));
+        async move { t.json(acme, "POST", &path, None, Some(body)).await }
+    };
+    // Expired: a correct code that has outlived its ten minutes is refused, and the signer may not sign.
+    let (_, eve) = code_request(&t, &asha, &pdf, "eve", "+4917022222222").await;
+    let late = mailed_code(&t, &acme, &eve, "+4917022222222").await;
+    let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+    sqlx::query("update message_code set expires_at = now() - interval '1 minute' where tenant_id = $1 and recipient = '+4917022222222'")
+        .bind(acme.id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(refused(verify(&eve, &late).await, "forbidden").contains("no longer works"));
+    assert!(refused(t.sign(&acme, &eve, None, signs.clone()).await, "forbidden").contains("confirm the code"));
+    // Too many tries: five wrong codes use the code up; the right one is refused after them, a new one works.
+    let (_, tom) = code_request(&t, &asha, &pdf, "tom", "+4917033333333").await;
+    let right = mailed_code(&t, &acme, &tom, "+4917033333333").await;
+    let wrong = if right == "000000" { "111111" } else { "000000" };
+    for _ in 0..5 {
+        refused(verify(&tom, wrong).await, "forbidden");
+    }
+    assert!(refused(verify(&tom, &right).await, "forbidden").contains("no longer works"), "the sixth try fails even with the right code");
+    assert!(refused(t.sign(&acme, &tom, None, signs.clone()).await, "forbidden").contains("confirm the code"));
+    let fresh = mailed_code(&t, &acme, &tom, "+4917033333333").await;
+    assert_eq!(verify(&tom, &fresh).await.unwrap().1["verified"], json!(true), "a new code starts again");
+    // Once: a code that worked does not work again (here for a signer who is already confirmed).
+    assert!(refused(verify(&tom, &fresh).await, "forbidden").contains("no longer works"));
 
     // ───────────── a group, a copy, and a signature handed over (DC-38, DC-45, DC-46) ─────────────
     let board = json!({"title": "Board consent", "document": t.upload(&asha, "board.pdf", &pdf).await, "allow_reassign": true,
@@ -1143,4 +1202,62 @@ async fn scenario() {
     let copy = mails.iter().find(|m| m["subject"].as_str().unwrap().starts_with("Signed:")).expect("the signer is sent a copy");
     assert_eq!(copy["attachments"][0]["id"].as_str().unwrap(), &po["sealed_document"].as_str().unwrap()[7..], "the sealed PDF is attached");
     assert!(copy["content"].as_str().unwrap().contains(po["sealed_sha256"].as_str().unwrap()));
+}
+
+#[test]
+fn a_page_where_there_is_no_pdf_service_cannot_start_a_signature() {
+    let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
+    rt.block_on(async { tokio::spawn(no_pdf_service()).await.unwrap() });
+}
+
+/// F4 of the second walk: a button that generates a document, sends it for signature and sets the record's status
+/// on a server with no PDF service. The page cannot be signed, so the press is refused whole: the record keeps its
+/// status, and no request, file or "sent" state is left behind.
+async fn no_pdf_service() {
+    let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
+    let db = Db::connect(DbConfig { url, max_connections: 16, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let mut packages = ferrum_domain::packages().expect("platform packages");
+    packages.extend(ferrum_app_sign::packages().expect("app packages"));
+    let catalog = Catalog::from_packages(packages).expect("catalog");
+    let mut hooks = HookRegistry::default();
+    ferrum_domain::register(&mut hooks);
+    ferrum_app_sign::register(&mut hooks);
+    let settings = KernelSettings { secret_key: Some(ferrum_kernel::secret::SecretKey::new([9u8; 32])), ..Default::default() };
+    let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
+    let store = Arc::new(MemStore::default());
+    k.set_file_store(store.clone());
+    let t = T { k: k.clone(), store };
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let quote = json!({"name": "XQuote", "label": "Quote", "kind": "master", "title_field": "title", "fields": [
+        {"name": "title", "type": "data", "required": true}, {"name": "customer", "type": "data"}, {"name": "customer_email", "type": "email"},
+        {"name": "status", "type": "select", "options": ["Open", "Out for Signature", "Signed"], "default": "Open"}]});
+    let send_it = json!({"name": "x_send_to_sign", "label": "Send to Sign", "permission": "write", "effects": [
+        {"type": "generate", "template": "x_quote.letter"},
+        {"type": "invoke", "capability": "sign.sign_request.create", "input": {"values":
+            "{'title': doc.title, 'document': results[0].url, 'source_sha256': results[0].sha256, 'send_on_create': true, 'reference_entity': 'XQuote', \
+              'reference_id': doc.id, 'signers': [{'role': 'Customer', 'name': doc.customer, 'email': doc.customer_email}]}"}},
+        {"type": "set_fields", "values": {"status": "'Out for Signature'"}}]});
+    let custom = |op: Value| -> ferrum_kernel::customize::NewCustomization { serde_json::from_value(json!({"entity": "XQuote", "op": op})).unwrap() };
+    t.k.batch_customizations(&acme.admin, vec![custom(json!({"op": "define_entity", "entity": quote}))], false).await.map_err(|(_, e)| e).expect("the entity");
+    let session = t.k.login("acme", "admin@acme.test", PASSWORD).await.expect("login");
+    let admin = t.k.load_ctx(acme.id, session.user, Some(session.token_version), "it".into()).await.expect("ctx");
+    let letter: ferrum_meta::DocumentDef =
+        serde_json::from_value(json!({"key": "x_quote.letter", "label": "Quote letter", "entity": "XQuote", "output": "page",
+        "languages": {"en": {"body": "<h1>{{ doc.title }}</h1><p>For {{ doc.customer }}</p>"}}}))
+        .unwrap();
+    t.k.save_document_template(&admin, &letter).await.expect("its letter");
+    t.k.batch_customizations(&admin, vec![custom(json!({"op": "add_action", "action": send_it}))], false).await.map_err(|(_, e)| e).expect("its button");
+    let session = t.k.login("acme", "admin@acme.test", PASSWORD).await.expect("login");
+    let admin = t.k.load_ctx(acme.id, session.user, Some(session.token_version), "it".into()).await.expect("ctx");
+    let q = t.k.insert(&admin, "XQuote", obj(json!({"title": "Quote Q-7", "customer": "Cora Client", "customer_email": "cora@client.test"}))).await.unwrap();
+    let q_id = uid(&q);
+    let said = refused(t.k.run_action(&admin, "XQuote", q_id, "x_send_to_sign", Value::Null).await, "invalid");
+    assert!(said.contains("FERRUM_PDF_URL"), "the person is told which service is missing: {said}");
+    t.maintenance().await;
+    assert_eq!(t.get(&admin, "XQuote", q_id).await["status"], json!("Open"), "the record stays where it was");
+    assert!(t.list(&t.sys(&acme), "SignRequest", json!({})).await.is_empty(), "no orphan request");
+    let files: i64 = t.scalar(&acme, "select count(*) from file_object where tenant_id = $1 and record_id = $2", q_id).await;
+    assert_eq!(files, 0, "no generated file kept for a signature that was not sent");
 }
