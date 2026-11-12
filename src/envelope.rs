@@ -32,7 +32,20 @@ pub(crate) async fn prepare(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
             return Err(Error::field("source_sha256", "the file is not the one generated: its SHA-256 differs"));
         }
     }
-    // Not readable yet: made in this very transaction. Upkeep finishes it once it has committed.
+    // Not readable yet: made in this very transaction. Upkeep finishes it once it has committed. A page document
+    // (what a server without a PDF service generates) is refused now, in the caller's transaction, so what asked
+    // (a button that also changed a record's status) is undone with it instead of leaving a request that cannot go.
+    let made: Option<(String, String)> = sqlx::query_as("select file_name, content_type from file_object where tenant_id = $1 and id = $2")
+        .bind(hc.ctx.tenant)
+        .bind(file)
+        .fetch_optional(&mut **hc.tx)
+        .await?;
+    if made.is_some_and(|(name, kind)| {
+        let name = name.to_lowercase();
+        kind.starts_with("text/html") || name.ends_with(".html") || name.ends_with(".htm")
+    }) {
+        return Err(Error::field("document", pdf::NOT_A_PDF));
+    }
     if document::bytes(hc.kernel, hc.ctx.tenant, file).await.is_err() && !doc.contains_key("created_at") {
         return Ok(());
     }
@@ -100,6 +113,11 @@ pub(crate) async fn send_pending(k: &ferrum_kernel::Kernel, ctx: &Ctx) -> Result
                 k.set_values_tx(ctx, &mut tx, "SignRequest", id, crate::request::obj(json!({"send_on_create": false}))).await?;
                 let title = format!("{} could not be sent", s(&doc, "number").unwrap_or_default());
                 crate::notice::notify_sender(&mut tx, ctx.tenant, &doc, &title, Some(&e.to_string())).await?;
+                // For a process or automation waiting on it, as for one that ended.
+                let payload = json!({"request": s(&doc, "id"), "number": s(&doc, "number"), "reason": e.to_string(),
+                                     "reference_entity": s(&doc, "reference_entity"), "reference_id": s(&doc, "reference_id")});
+                ferrum_kernel::outbox::enqueue(&mut tx, ctx.tenant, &format!("{}.request_failed", crate::PACKAGE), Some("SignRequest"), Some(id), payload)
+                    .await?;
                 tx.commit().await?;
             }
         }
