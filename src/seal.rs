@@ -21,11 +21,7 @@ use uuid::Uuid;
 
 /// Whether a request waits for sealing: in progress, every signer signed, nothing sealed yet.
 pub fn ready(doc: &Doc) -> bool {
-    let signers = rows(doc, "signers");
-    s(doc, "status") == Some("In Progress")
-        && s(doc, "sealed_document").is_none()
-        && !signers.is_empty()
-        && signers.iter().all(|r| s(r, "status") == Some("Signed"))
+    s(doc, "status") == Some("In Progress") && s(doc, "sealed_document").is_none() && crate::request::signed_by_all(doc)
 }
 
 /// Seals the request if it is ready; `Ok(false)` when there was nothing to do. On failure the
@@ -111,6 +107,7 @@ async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, sha: &str, s
     document::freeze(&mut tx, sys.tenant, file, ev).await?;
     let patch = json!({"status": "Completed", "completed_at": ts(at), "sealed_document": format!("/files/{file}"), "sealed_sha256": sha, "seal_error": null});
     let done = k.update_tx(sys, &mut tx, "SignRequest", request, obj(patch), None).await?;
+    crate::envelope::ended(&mut tx, sys, &done, "Completed").await?;
     let number = s(&done, "number").unwrap_or_default().to_string();
     notice::notify_sender(
         &mut tx,
@@ -152,6 +149,10 @@ async fn failed(k: &Kernel, sys: &Ctx, doc: &Doc, e: &Error) {
     }
     tracing::warn!(tenant = %sys.tenant, request = ?s(doc, "id"), "sealing failed: {e}");
 }
+
+/// The kind of signature every document sealed here carries (DC-43): what it is and what it is not.
+pub const KIND: &str = "Simple electronic signature with an audit trail. Not an advanced or qualified electronic signature, and not a \
+                        PAdES digital signature: no signing certificate, signature device or timestamp authority was used.";
 
 /// What each field shows on the sealed pages.
 pub fn stamps(doc: &Doc) -> std::result::Result<Vec<Stamp>, String> {
@@ -209,16 +210,33 @@ impl Certificate {
         if let (Some(e), Some(r)) = (s(doc, "reference_entity"), s(doc, "reference_id")) {
             head.push(("Linked record".into(), format!("{e} {r}")));
         }
+        // What kind of signature this is, in plain words: nobody should take it for more than it is.
+        head.push(("Kind of signature".into(), KIND.into()));
         let signers = rows(doc, "signers")
             .iter()
             .map(|r| {
-                let method = if s(r, "signature_image").is_some() { "signature drawn" } else { "signature typed" };
-                let code = if s(r, "access_code_hash").is_some() { " · access code verified" } else { "" };
-                [
-                    format!("{} <{}>, {}", s(r, "name").unwrap_or_default(), s(r, "email").unwrap_or_default(), s(r, "role").unwrap_or_default()),
-                    format!("Signed {} · {method}{code} · agreed to sign electronically", time(r, "signed_at").map(human).unwrap_or_default()),
-                    format!("IP hash {} · {}", s(r, "ip_hash").unwrap_or("-"), s(r, "user_agent").unwrap_or("unknown device")),
-                ]
+                let who = format!("{} <{}>, {}", s(r, "name").unwrap_or_default(), s(r, "email").unwrap_or_default(), s(r, "role").unwrap_or_default());
+                match s(r, "status") {
+                    _ if crate::request::copy_only(r) => [who, "Received a copy; signed nothing".into(), String::new()],
+                    Some("Not Needed") => [who, "Did not sign: another signer of their group signed".into(), String::new()],
+                    _ => {
+                        let method = if s(r, "signature_image").is_some() { "signature drawn" } else { "signature typed" };
+                        let code = if s(r, "access_code_hash").is_some() { " · access code verified" } else { "" };
+                        let identity = match s(r, "identity_channel") {
+                            Some("email") => " · one-time code sent to their e-mail address confirmed",
+                            Some("text") => " · one-time code sent to their phone confirmed",
+                            _ => "",
+                        };
+                        [
+                            who,
+                            format!(
+                                "Signed {} · {method}{code}{identity} · agreed to sign electronically",
+                                time(r, "signed_at").map(human).unwrap_or_default()
+                            ),
+                            format!("IP hash {} · {}", s(r, "ip_hash").unwrap_or("-"), s(r, "user_agent").unwrap_or("unknown device")),
+                        ]
+                    }
+                }
             })
             .collect();
         let events = trail

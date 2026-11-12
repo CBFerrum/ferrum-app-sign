@@ -120,6 +120,7 @@ fn gate(o: &Opened) -> Result<Option<String>> {
         _ => match s(&o.signer, "status") {
             Some("Signed") => Some("You have already signed this document."),
             Some("Declined") => Some("You declined to sign this document."),
+            Some("Not Needed") => Some("Another signer of your group signed this document for you all."),
             _ => None,
         },
     };
@@ -242,6 +243,8 @@ pub async fn view(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Resu
             "signer": {"role": s(&o.signer, "role"), "name": s(&o.signer, "name"), "email": s(&o.signer, "email"), "status": "Viewed"},
             "fields": mine.iter().map(field_view).collect::<Vec<_>>(),
             "needs": {"signature": needs("Signature"), "initials": needs("Initials")},
+            "identity": {"code": request::code_channel(r, &o.signer), "verified": o.signer.get("identity_verified_at").is_some_and(|v| !v.is_null())},
+            "can_reassign": crate::b(r, "allow_reassign"),
             "consent": CONSENT,
         }))
     })
@@ -428,6 +431,10 @@ pub async fn sign(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, raw: &[
             tx.commit().await?;
             return Err(e);
         }
+        if request::code_channel(&o.request, &o.signer).is_some() && o.signer.get("identity_verified_at").is_none_or(Value::is_null) {
+            tx.rollback().await?;
+            return Err(Error::Forbidden("confirm the code we sent you before signing".into()));
+        }
         let plan = prepare(&o, &body, &sys.today().to_string())?;
         let (status, all_signed) = apply_signature(k, &sys, &mut tx, &o, plan, c, &submission).await?;
         tx.commit().await?;
@@ -475,10 +482,22 @@ async fn apply_signature(k: &Kernel, sys: &Ctx, tx: &mut Tx, o: &Opened, plan: S
     event::record(k, sys, tx, &o.request, Entry::new("Signed", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref()).details(method))
         .await?;
 
-    // Who signs next: the request as it now stands.
+    // The others of their group are not needed any more: one of them signed for all.
     let rid = doc_id(&o.request)?;
+    if let Some(group) = s(&o.signer, "signing_group").map(str::to_lowercase) {
+        for other in rows(&o.request, "signers").iter().filter(|r| {
+            id(r, "id") != Some(sid)
+                && s(r, "signing_group").is_some_and(|g| g.to_lowercase() == group)
+                && !matches!(s(r, "status"), Some("Signed" | "Declined" | "Not Needed"))
+        }) {
+            set_signer(k, sys, tx, doc_id(other)?, json!({"status": "Not Needed"})).await?;
+            let detail = format!("{} signed for the group", s(&o.signer, "name").unwrap_or("another signer"));
+            event::record(k, sys, tx, &o.request, Entry::new("Not Needed", "system").signer(other).details(detail)).await?;
+        }
+    }
+    // Who signs next: the request as it now stands.
     let mut after = k.get_tx(sys, tx, "SignRequest", rid, false).await?;
-    let all_signed = rows(&after, "signers").iter().all(|r| s(r, "status") == Some("Signed"));
+    let all_signed = request::signed_by_all(&after);
     if !all_signed && request::sequential(&after) {
         let next: Vec<Doc> = request::turn(&after).into_iter().filter(|r| s(r, "status") == Some("Waiting")).collect();
         if !next.is_empty() {
@@ -557,12 +576,139 @@ pub async fn decline(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, raw:
         .await?;
         let rid = doc_id(&o.request)?;
         let done = k.update_tx(&sys, &mut tx, "SignRequest", rid, obj(json!({"status": "Declined"})), None).await?;
+        crate::envelope::ended(&mut tx, &sys, &done, "Declined").await?;
         let title = format!("{} declined {}", s(&o.signer, "name").unwrap_or("A signer"), s(&done, "number").unwrap_or_default());
         notice::notify_sender(&mut tx, tenant, &done, &title, Some(&reason)).await?;
         tx.commit().await?;
         Ok(Reply::Ok(json!({"status": "Declined", "request_status": "Declined", "replayed": false})))
     })
     .await
+}
+
+/// `POST /signing/{token}/code`: sends the signer the one-time code their request asks for, by e-mail or text
+/// message (the platform's codes: ten minutes, once, five tries, five sends an hour).
+pub async fn send_code(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Result<Reply> {
+    let gate = with_link(k, tenant, token_str, c, |o, mut tx, sys| async move {
+        let channel = request::code_channel(&o.request, &o.signer).ok_or_else(|| Error::invalid("no code is asked of you"))?;
+        let to = code_recipient(&o.signer, channel)?;
+        k.send_code(&mut tx, &sys, &code_purpose(&o.signer)?, CODE_TEMPLATE, &to, channel).await?;
+        let actor = s(&o.signer, "email").unwrap_or_default().to_string();
+        let detail = if channel == "email" { "One-time code sent by e-mail".to_string() } else { "One-time code sent by text message".to_string() };
+        event::record(
+            k,
+            &sys,
+            &mut tx,
+            &o.request,
+            Entry::new("Code Sent", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref()).details(detail),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(json!({"sent": true, "channel": channel}))
+    })
+    .await?;
+    Ok(gate.reply())
+}
+
+/// `POST /signing/{token}/verify` with `{code}`: confirms the signer's identity for this request. A wrong code
+/// counts against the platform's five tries and is refused.
+pub async fn confirm_code(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, raw: &[u8]) -> Result<Reply> {
+    let code = match serde_json::from_slice::<Value>(raw) {
+        Ok(Value::Object(m)) if raw.len() <= 4096 => m.get("code").and_then(Value::as_str).map(|v| clean(v, 12)).filter(|v| !v.is_empty()),
+        _ => None,
+    }
+    .ok_or_else(|| Error::field("code", "enter the code we sent you"))?;
+    let gate = with_link(k, tenant, token_str, c, |o, mut tx, sys| {
+        let code = code.clone();
+        async move {
+            let channel = request::code_channel(&o.request, &o.signer).ok_or_else(|| Error::invalid("no code is asked of you"))?;
+            let to = code_recipient(&o.signer, channel)?;
+            if !k.verify_code(&mut tx, &sys, &code_purpose(&o.signer)?, &to, &code).await? {
+                tx.commit().await?;
+                return Err(Error::Forbidden("that code is wrong or no longer works: ask for a new one".into()));
+            }
+            set_signer(k, &sys, &mut tx, doc_id(&o.signer)?, json!({"identity_verified_at": ts(now()), "identity_channel": channel})).await?;
+            let actor = s(&o.signer, "email").unwrap_or_default().to_string();
+            let detail =
+                if channel == "email" { "Confirmed a one-time code sent to their e-mail address" } else { "Confirmed a one-time code sent to their phone" };
+            event::record(
+                k,
+                &sys,
+                &mut tx,
+                &o.request,
+                Entry::new("Identity Verified", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref()).details(detail),
+            )
+            .await?;
+            tx.commit().await?;
+            Ok(json!({"verified": true, "channel": channel}))
+        }
+    })
+    .await?;
+    Ok(gate.reply())
+}
+
+/// The message template a signer's code is sent with (`messages:` in the package).
+const CODE_TEMPLATE: &str = "sign.signing_code";
+
+fn code_purpose(signer: &Doc) -> Result<String> {
+    Ok(format!("sign:{}", doc_id(signer)?))
+}
+
+fn code_recipient(signer: &Doc, channel: &str) -> Result<ferrum_kernel::messages::Recipient> {
+    let to = if channel == "text" { s(signer, "phone") } else { s(signer, "email") };
+    to.map(ferrum_kernel::messages::Recipient::address).ok_or_else(|| Error::invalid("the sender gave no address to send your code to"))
+}
+
+/// `POST /signing/{token}/reassign` with `{name, email, reason}`: a signer hands their signature over to someone
+/// else, when the request allows it. Their link stops working; the new signer gets one of their own.
+pub async fn reassign(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, raw: &[u8]) -> Result<Reply> {
+    let body: Map<String, Value> = match serde_json::from_slice(raw) {
+        Ok(Value::Object(m)) if raw.len() <= 64 * 1024 => m,
+        _ => return Err(Error::invalid("send a JSON object with the new signer's name and email, and why")),
+    };
+    let text = |k: &str, max: usize| body.get(k).and_then(Value::as_str).map(|v| clean(v, max)).filter(|v| !v.is_empty());
+    let name = text("name", 140).ok_or_else(|| Error::field("name", "who signs instead of you"))?;
+    let email = text("email", 254).map(|e| e.to_lowercase()).filter(|e| e.contains('@')).ok_or_else(|| Error::field("email", "their email address"))?;
+    let reason = text("reason", 1000).ok_or_else(|| Error::field("reason", "say why"))?;
+    let gate = with_link(k, tenant, token_str, c, |o, mut tx, sys| {
+        let (name, email, reason) = (name.clone(), email.clone(), reason.clone());
+        async move {
+            if !crate::b(&o.request, "allow_reassign") {
+                return Err(Error::Forbidden("the sender does not let this request be handed over".into()));
+            }
+            let was = format!("{} <{}>", s(&o.signer, "name").unwrap_or_default(), s(&o.signer, "email").unwrap_or_default());
+            let sid = doc_id(&o.signer)?;
+            set_signer(
+                k,
+                &sys,
+                &mut tx,
+                sid,
+                json!({"name": name, "email": email, "status": "Sent", "sent_at": ts(now()), "viewed_at": null, "failed_attempts": 0, "locked_until": null,
+                       "identity_verified_at": null, "identity_channel": null, "reassigned_from": format!("{was}: {reason}")}),
+            )
+            .await?;
+            let after = k.get_tx(&sys, &mut tx, "SignRequest", doc_id(&o.request)?, false).await?;
+            let signer = rows(&after, "signers").into_iter().find(|r| id(r, "id") == Some(sid)).ok_or_else(not_found)?;
+            event::record(
+                k,
+                &sys,
+                &mut tx,
+                &after,
+                Entry::new("Reassigned", &was).signer(&signer).client(&o.ip_hash(c), c.user_agent.as_deref()).details(format!("from {was}: {reason}")),
+            )
+            .await?;
+            let out = Outbox::load(k, &sys, &mut tx).await?;
+            let emailed = out.invite(k, &sys, &mut tx, &after, &signer, false).await?;
+            if !emailed {
+                let link = out.link(&after, &signer)?;
+                let title = format!("{} handed {} to {name}", was, s(&after, "number").unwrap_or_default());
+                notice::notify_sender(&mut tx, tenant, &after, &title, Some(&format!("{reason}\nSend them their link: {link}"))).await?;
+            }
+            tx.commit().await?;
+            Ok(json!({"reassigned": true}))
+        }
+    })
+    .await?;
+    Ok(gate.reply())
 }
 
 /// `POST /verify` with a PDF as the body: is it a document sealed here, unchanged?
