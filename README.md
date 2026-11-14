@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.3.1-4f46e5?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.2-4f46e5?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 [![CI](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml)
@@ -41,7 +41,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 
 | | |
 |---|---|
-| 📦 **Version** | 0.3.1 |
+| 📦 **Version** | 0.3.2 |
 | 🖥️ **Kind** | Its own interface at `/sign/` and a page for signers at `/sign/s/{workspace}/{token}`, with Ferrum's records screens for the rest |
 | ➕ **What it adds** | 7 entities in one package, 2 roles, 3 reports, a launcher app, a Create menu entry, one message template, 4 events other apps can follow, an assistant |
 | 🧱 **Depends on** | The platform's `core` package. Nothing else is required |
@@ -354,6 +354,7 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 
 ### ✅ Recently shipped
 
+- [x] **0.3.2**: A signer's link goes through the operator's link host when Sign and Mail have no address of their own.
 - [x] **0.3.1**: A page can no longer start a signature; a request that cannot be sent raises an event; a test for one-time codes.
 - [x] **0.3.0**: One-time codes by email or text, copy-only recipients, signing groups, reassigning, per-request reminders, sign from any record, events for completed, declined and expired requests, and the kind of signature on the certificate.
 - [x] **0.2.19 to 0.2.18**: The upgraded design system and lighter first page.
@@ -466,7 +467,7 @@ CHANGELOG.md          what changed in each version
 
 ## 📜 Changelog
 
-Every release is described in [CHANGELOG.md](CHANGELOG.md). The latest is **0.3.1**; **0.3.0** added one-time codes, copy-only recipients, signing groups and signing from any record.
+Every release is described in [CHANGELOG.md](CHANGELOG.md). The latest is **0.3.2**, whose signer links take the platform's stable address; **0.3.0** added one-time codes, copy-only recipients, signing groups and signing from any record.
 
 ## 🤝 Contributing
 

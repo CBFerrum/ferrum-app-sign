@@ -33,7 +33,7 @@ Administrators can do everything. Signers need no account.
 | Field | Default | Meaning |
 |---|---|---|
 | `sender_name` | the workspace name | the organization signers see in emails, on the signing page and the certificate |
-| `public_url` | the Mail app's `public_url` | e.g. `https://erp.example.com`: the base of emailed links (required when Mail is installed) |
+| `public_url` | the Mail app's `public_url`, else the server's address for people outside | e.g. `https://erp.example.com`: the base of emailed links (required when Mail is installed). Left empty in both apps, a signer's link is the platform's for people outside: through the operator's link host when there is one (`FERRUM_LINK_HOST`, `https://{it}/go/{workspace}/p/api/site/…`), so it keeps working when the workspace's address changes, else the workspace's own address |
 | `link_expiry_days` | 30 (1–365) | a request without `expires_on` expires this many days after it is sent |
 | `reminder_every_days` | 3 (0–60) | signers whose turn it is are reminded after this many days without signing, then at the same interval; 0 = off |
 | `max_reminders` | 3 (0–20) | automatic reminders per signer at most |
@@ -203,7 +203,7 @@ letters, other scripts as `?`. Signatures drawn on the pad are images and show i
 With the Mail app (`comms`) installed, emails are `Communication` records on the request's
 timeline, sent and retried by Mail: invitations (when a signer's turn comes), reminders,
 withdrawal notices on void, and the sealed copy on completion. Emailed links need a public URL
-(Sign Settings, else Mail's). Without Mail, nothing is emailed: actions return the links, the
+(Sign Settings, else Mail's, else the server's address for people outside). Without Mail, nothing is emailed: actions return the links, the
 acting user and the sender get in-app notifications with them (the sender also when a signer's
 turn comes or a reminder is due), and the sender shares them.
 
