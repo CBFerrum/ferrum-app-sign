@@ -1261,3 +1261,58 @@ async fn no_pdf_service() {
     let files: i64 = t.scalar(&acme, "select count(*) from file_object where tenant_id = $1 and record_id = $2", q_id).await;
     assert_eq!(files, 0, "no generated file kept for a signature that was not sent");
 }
+
+#[test]
+fn a_signers_link_goes_through_the_link_host() {
+    let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
+    rt.block_on(async { tokio::spawn(link_host()).await.unwrap() });
+}
+
+/// A signer is someone outside the workspace. With no address of Sign's (nor Mail's), the link they are given is the
+/// platform's for people outside: through the operator's link host (`/go/{workspace}/p`), so it keeps working when the
+/// workspace's address changes, to the signing endpoints, which every host of the workspace serves. With an address of
+/// Sign's own, it is as before; with none at all, it is relative, as `sign_end_to_end` shows.
+async fn link_host() {
+    let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
+    let db = Db::connect(DbConfig { url, max_connections: 8, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let mut packages = ferrum_domain::packages().expect("platform packages");
+    packages.extend(ferrum_app_sign::packages().expect("app packages"));
+    let mut hooks = HookRegistry::default();
+    ferrum_domain::register(&mut hooks);
+    ferrum_app_sign::register(&mut hooks);
+    let settings = KernelSettings {
+        secret_key: Some(ferrum_kernel::secret::SecretKey::new([9u8; 32])),
+        public_url: Some("https://erp.acme.test".into()),
+        link_host: Some("go.acme.test".into()),
+        ..Default::default()
+    };
+    let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
+    let store = Arc::new(MemStore::default());
+    k.set_file_store(store.clone());
+    let t = T { k: k.clone(), store };
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
+    let pdf = contract_pdf("Order form");
+    let send = |title: &'static str| {
+        let (t, asha, pdf) = (&t, asha.clone(), pdf.clone());
+        async move {
+            let request = json!({"title": title, "document": t.upload(&asha, "order.pdf", &pdf).await,
+                "signers": [{"role": "Client", "name": "Jane Doe", "email": "jane@client.test"}],
+                "fields": [field("Client", "Signature", "Client signature", 1, 72, 600, 200, 50)]});
+            let id = uid(&t.k.insert(&asha, "SignRequest", obj(request)).await.unwrap());
+            t.action(&asha, id, "send", json!({})).await["signers"][0]["url"].as_str().unwrap().to_string()
+        }
+    };
+    let link = send("Order").await;
+    assert!(link.starts_with("https://go.acme.test/go/acme/p/api/site/acme/sign/s/"), "{link}");
+    let token = token_of(&link);
+    assert!(t.view(&acme, &token, None).await.unwrap().0 == 200, "the link's token is the signer's");
+    // Sending made the settings (their signing key); an address of Sign's own goes in them.
+    let settings = t.list(&mira, "SignSettings", json!({})).await;
+    t.k.update(&mira, "SignSettings", uid(&settings[0]), obj(json!({"public_url": "https://sign.acme.test/"})), None).await.unwrap();
+    let link = send("Another order").await;
+    assert!(link.starts_with("https://sign.acme.test/api/site/acme/sign/s/"), "{link}");
+}

@@ -22,7 +22,9 @@ fn base(url: Option<String>) -> Option<String> {
 }
 
 /// The tenant's settings, with defaults when nobody saved them yet. The public URL falls back to
-/// the Mail app's when Sign has none, then to the workspace's own address.
+/// the Mail app's when Sign has none, then to where the platform sends people outside the workspace, as a signer is: through
+/// the operator's link host when there is one (`/go/{workspace}/p`), so a link keeps working when the workspace's address
+/// changes, else the workspace's own address.
 pub async fn load(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<Settings> {
     type Row = (Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>);
     let row: Option<Row> = sqlx::query_as(
@@ -38,7 +40,9 @@ pub async fn load(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<Settings> {
         public_url = base(comms.first().and_then(|d| s(d, "public_url")).map(str::to_string));
     }
     if public_url.is_none() {
-        public_url = base(k.link_base(ctx.tenant).await);
+        // With nothing after it: what comes before the paths Sign adds (`/api/site/…`, which every host of the workspace
+        // serves, its portal's too).
+        public_url = base(k.person_link(ctx.tenant, ferrum_kernel::notify::Audience::Outside, "").await);
     }
     let sender_name = match sender.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
         Some(v) => v,

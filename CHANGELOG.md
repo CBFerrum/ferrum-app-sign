@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2
+
+* **A signer's link through the operator's link host.** With no public URL in Sign Settings nor in Mail's, a signer's
+  link used to start at the workspace's staff address (`Kernel::link_base`). It now comes from the platform's address
+  for people outside (`Kernel::person_link`): through the operator's link host when there is one
+  (`https://{FERRUM_LINK_HOST}/go/{workspace}/p/api/site/{workspace}/sign/s/{token}`), so a link keeps working when the
+  workspace's address changes, and leads to the workspace's portal host when it has one (which serves the signing
+  endpoints, as every host of the workspace does); without a link host, the workspace's own address, as before. With
+  a public URL set, nothing changes; with no address at all, the link is relative, as before. No database change, no
+  interface change.
+
 ## 0.3.1
 
 * **A page cannot start a signature, and the press is refused whole.** Sign needs a PDF, and a server with no PDF
