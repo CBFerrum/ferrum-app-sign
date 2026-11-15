@@ -77,7 +77,7 @@ fn fresh_key() -> String {
 async fn read_key(k: &Kernel, tx: &mut Tx, tenant: Uuid) -> Result<Option<Vec<u8>>> {
     let id: Option<Uuid> = sqlx::query_scalar("select id from e_sign_settings where tenant_id = $1 limit 1").bind(tenant).fetch_optional(&mut **tx).await?;
     let Some(id) = id else { return Ok(None) };
-    match k.secret(tx, tenant, "SignSettings", id, "signing_key").await? {
+    match crate::keys::field(k, tx, tenant, "SignSettings", id, "signing_key").await? {
         Some(hexed) => hex::decode(hexed.trim()).map(Some).map_err(|_| Error::internal("the signing key in Sign Settings is not hex")),
         None => Ok(None),
     }
@@ -100,7 +100,7 @@ async fn create_key(k: &Kernel, tenant: Uuid) -> Result<()> {
         let id: Option<Uuid> =
             sqlx::query_scalar("select id from e_sign_settings where tenant_id = $1 limit 1 for update").bind(tenant).fetch_optional(&mut *tx).await?;
         if let Some(id) = id
-            && k.secret(&mut tx, tenant, "SignSettings", id, "signing_key").await?.is_some()
+            && crate::keys::field(k, &mut tx, tenant, "SignSettings", id, "signing_key").await?.is_some()
         {
             return tx.commit().await.map_err(Into::into);
         }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3
+
+* **Sign reads its signing key with its own handle on the vault**, in the same transaction as before, instead of the
+  platform's reader that any app could use, which is deprecated. It registers as itself (`hooks.app("sign", …)`) to be
+  given that handle; another app's test that registers Sign does the same. Needs a platform with the vault's field
+  reader (0.3.8 on the platform's main from cdec881). Signers and senders see nothing new; while the vault is closed,
+  signing links refuse plainly. No database or interface change.
+
 ## 0.3.2
 
 * **A signer's link through the operator's link host.** With no public URL in Sign Settings nor in Mail's, a signer's
