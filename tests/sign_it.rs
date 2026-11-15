@@ -441,8 +441,9 @@ fn sign_end_to_end() {
 
 async fn scenario() {
     let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
-    let db = Db::connect(DbConfig { url, max_connections: 16, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 16, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("app packages"));
     packages.extend(ferrum_app_comms::packages().expect("mail packages"));
@@ -450,7 +451,7 @@ async fn scenario() {
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
     ferrum_app_sign::register(&mut hooks);
-    ferrum_app_comms::register(&mut hooks);
+    hooks.app("comms", &[], ferrum_app_comms::register);
     for source in ferrum_app_sign::reports() {
         ferrum_domain::reports::add_source(source);
     }
@@ -1217,7 +1218,7 @@ fn a_page_where_there_is_no_pdf_service_cannot_start_a_signature() {
 async fn no_pdf_service() {
     let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
     let db = Db::connect(DbConfig { url, max_connections: 16, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("app packages"));
     let catalog = Catalog::from_packages(packages).expect("catalog");
@@ -1276,7 +1277,7 @@ fn a_signers_link_goes_through_the_link_host() {
 async fn link_host() {
     let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
     let db = Db::connect(DbConfig { url, max_connections: 8, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("app packages"));
     let mut hooks = HookRegistry::default();
@@ -1315,4 +1316,14 @@ async fn link_host() {
     t.k.update(&mira, "SignSettings", uid(&settings[0]), obj(json!({"public_url": "https://sign.acme.test/"})), None).await.unwrap();
     let link = send("Another order").await;
     assert!(link.starts_with("https://sign.acme.test/api/site/acme/sign/s/"), "{link}");
+}
+
+/// What opens the test's vault: the database password of `url`, with Argon2id kept cheap for tests.
+fn opener(url: &str) -> ferrum_kernel::vault::Opener {
+    ferrum_kernel::vault::Opener {
+        database_url: url.to_string(),
+        file: "/nonexistent/root.key".into(),
+        kdf: ferrum_kernel::vault::Kdf { m_kib: 64, t: 1, p: 1 },
+        ..Default::default()
+    }
 }
