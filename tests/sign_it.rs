@@ -207,6 +207,8 @@ static DB: std::sync::Mutex<()> = std::sync::Mutex::new(());
 struct T {
     k: Arc<Kernel>,
     store: Arc<MemStore>,
+    /// Sign's own handle on the vault, as its registration was given it: what reads its secret fields.
+    sign: ferrum_kernel::vault::Vault,
 }
 
 struct Tenant {
@@ -320,9 +322,9 @@ impl T {
     async fn key(&self, t: &Tenant) -> Vec<u8> {
         let mut tx = self.k.db.tenant_tx(t.id).await.unwrap();
         let id: Uuid = sqlx::query_scalar("select id from e_sign_settings where tenant_id = $1").bind(t.id).fetch_one(&mut *tx).await.unwrap();
-        let hexed = self.k.secret(&mut tx, t.id, "SignSettings", id, "signing_key").await.unwrap().expect("signing key");
+        let hexed = self.sign.field(&self.k, &mut tx, t.id, "SignSettings", id, "signing_key").await.unwrap().expect("signing key");
         tx.commit().await.unwrap();
-        hex::decode(hexed).unwrap()
+        hex::decode(hexed.as_str()).unwrap()
     }
 
     /// One call to the public site, as the server hands it to the package.
@@ -450,8 +452,16 @@ async fn scenario() {
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
-    ferrum_app_sign::register(&mut hooks);
+    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    let mut sign = None;
+    hooks.app("sign", &sign_packages, |h| {
+        ferrum_app_sign::register(h);
+        sign = Some(h.vault());
+    });
+    hooks.own("sign", &sign_packages);
     hooks.app("comms", &[], ferrum_app_comms::register);
+    let comms_packages: Vec<String> = ferrum_app_comms::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.own("comms", &comms_packages);
     for source in ferrum_app_sign::reports() {
         ferrum_domain::reports::add_source(source);
     }
@@ -460,7 +470,7 @@ async fn scenario() {
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store };
+    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
 
     // ───────────── a workspace without Mail, in New York ─────────────
     let acme = t.tenant("acme", &["sign"], "America/New_York").await;
@@ -1203,6 +1213,11 @@ async fn scenario() {
     let copy = mails.iter().find(|m| m["subject"].as_str().unwrap().starts_with("Signed:")).expect("the signer is sent a copy");
     assert_eq!(copy["attachments"][0]["id"].as_str().unwrap(), &po["sealed_document"].as_str().unwrap()[7..], "the sealed PDF is attached");
     assert!(copy["content"].as_str().unwrap().contains(po["sealed_sha256"].as_str().unwrap()));
+    // Every secret field Sign read it read with its own handle: none past the vault, which the platform notes
+    // (`ferrum task legacy_key`) in the background.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let past: Vec<_> = t.k.legacy_key(vec![]).await.unwrap().uses.into_iter().filter(|u| u.0.starts_with("reader:")).map(|u| u.1).collect();
+    assert!(past.is_empty(), "read past the vault: {past:?}");
 }
 
 #[test]
@@ -1217,19 +1232,26 @@ fn a_page_where_there_is_no_pdf_service_cannot_start_a_signature() {
 /// status, and no request, file or "sent" state is left behind.
 async fn no_pdf_service() {
     let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
-    let db = Db::connect(DbConfig { url, max_connections: 16, ..Default::default() }).await.expect("connect");
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 16, ..Default::default() }).await.expect("connect");
     sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("app packages"));
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
-    ferrum_app_sign::register(&mut hooks);
+    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    let mut sign = None;
+    hooks.app("sign", &sign_packages, |h| {
+        ferrum_app_sign::register(h);
+        sign = Some(h.vault());
+    });
+    hooks.own("sign", &sign_packages);
     let settings = KernelSettings { secret_key: Some(ferrum_kernel::secret::SecretKey::new([9u8; 32])), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store };
+    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
     let acme = t.tenant("acme", &["sign"], "UTC").await;
     let quote = json!({"name": "XQuote", "label": "Quote", "kind": "master", "title_field": "title", "fields": [
         {"name": "title", "type": "data", "required": true}, {"name": "customer", "type": "data"}, {"name": "customer_email", "type": "email"},
@@ -1276,13 +1298,20 @@ fn a_signers_link_goes_through_the_link_host() {
 /// Sign's own, it is as before; with none at all, it is relative, as `sign_end_to_end` shows.
 async fn link_host() {
     let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
-    let db = Db::connect(DbConfig { url, max_connections: 8, ..Default::default() }).await.expect("connect");
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 8, ..Default::default() }).await.expect("connect");
     sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("app packages"));
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
-    ferrum_app_sign::register(&mut hooks);
+    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    let mut sign = None;
+    hooks.app("sign", &sign_packages, |h| {
+        ferrum_app_sign::register(h);
+        sign = Some(h.vault());
+    });
+    hooks.own("sign", &sign_packages);
     let settings = KernelSettings {
         secret_key: Some(ferrum_kernel::secret::SecretKey::new([9u8; 32])),
         public_url: Some("https://erp.acme.test".into()),
@@ -1292,7 +1321,7 @@ async fn link_host() {
     let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store };
+    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
     let acme = t.tenant("acme", &["sign"], "UTC").await;
     let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
     let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;

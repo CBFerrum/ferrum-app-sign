@@ -394,11 +394,11 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 
 ## 🚀 Install
 
-Sign is a native app compiled into the official Ferrum server image. A workspace administrator installs it from **Apps** (`/store/`). Self-hosters who build their own image enable the `sign` feature of the server. It needs Ferrum platform `>=0.3, <0.4`.
+Sign is a native app compiled into the official Ferrum server image. A workspace administrator installs it from **Apps** (`/store/`). Self-hosters who build their own image enable the `sign` feature of the server. It needs Ferrum platform `>=0.3.8, <0.4`.
 
 **First steps**
 
-1. The server needs `FERRUM_SECRET_KEY`: the signing key is a sealed secret field.
+1. The server needs its vault open: the signing key is a sealed secret field, kept there as Sign's and read only by Sign.
 2. Open **Sign Settings** and set the sender name signers see, the public URL (used for emailed links, and required when the Mail app is installed), the default link expiry in days (30), the reminder cadence (3 days) and the maximum reminders (3). The signing key is created on first use.
 3. Give people the **Sign User** role and the people who keep templates and see every request **Sign Manager**.
 4. For emailed invitations, install the Mail app, or rely on the server's own mailer. Without any email, the sender gets the links in a notification and shares them.

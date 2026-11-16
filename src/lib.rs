@@ -16,6 +16,7 @@ mod document;
 mod envelope;
 mod event;
 pub mod identity;
+mod keys;
 mod notice;
 mod pdf;
 mod reports;
@@ -48,13 +49,17 @@ pub fn packages() -> std::result::Result<Vec<ferrum_meta::Package>, ferrum_meta:
 }
 
 /// Registers this app's document hooks and its public signing endpoints.
+/// Call it inside the platform's registration of the app, `hooks.app("sign", …)`: it takes its own vault handle
+/// there, which reads its secret fields (`keys.rs`).
 pub fn register(hooks: &mut HookRegistry) {
+    let site: Arc<dyn ferrum_kernel::Site> = Arc::new(site::SignSite);
+    keys::remember(&site, hooks.vault());
     hooks
         .register("SignSettings", Arc::new(settings::SettingsHook))
         .register("SignTemplate", Arc::new(template::TemplateHook))
         .register("SignRequest", Arc::new(request::RequestHook))
         .register("SignEvent", Arc::new(event::EventHook))
-        .add_site("sign", Arc::new(site::SignSite));
+        .add_site("sign", site);
 }
 
 /// Sends `values` (a Sign Request's: `title`, `document` as a `/files/<id>` path, `source_sha256`, `signers`,
