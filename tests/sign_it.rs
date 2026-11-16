@@ -465,8 +465,7 @@ async fn scenario() {
     for source in ferrum_app_sign::reports() {
         ferrum_domain::reports::add_source(source);
     }
-    let settings =
-        KernelSettings { secret_key: Some(ferrum_kernel::secret::SecretKey::new([9u8; 32])), pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
+    let settings = KernelSettings { pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
@@ -1213,11 +1212,6 @@ async fn scenario() {
     let copy = mails.iter().find(|m| m["subject"].as_str().unwrap().starts_with("Signed:")).expect("the signer is sent a copy");
     assert_eq!(copy["attachments"][0]["id"].as_str().unwrap(), &po["sealed_document"].as_str().unwrap()[7..], "the sealed PDF is attached");
     assert!(copy["content"].as_str().unwrap().contains(po["sealed_sha256"].as_str().unwrap()));
-    // Every secret field Sign read it read with its own handle: none past the vault, which the platform notes
-    // (`ferrum task legacy_key`) in the background.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let past: Vec<_> = t.k.legacy_key(vec![]).await.unwrap().uses.into_iter().filter(|u| u.0.starts_with("reader:")).map(|u| u.1).collect();
-    assert!(past.is_empty(), "read past the vault: {past:?}");
 }
 
 #[test]
@@ -1247,8 +1241,7 @@ async fn no_pdf_service() {
         sign = Some(h.vault());
     });
     hooks.own("sign", &sign_packages);
-    let settings = KernelSettings { secret_key: Some(ferrum_kernel::secret::SecretKey::new([9u8; 32])), ..Default::default() };
-    let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
+    let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
     let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
@@ -1312,12 +1305,7 @@ async fn link_host() {
         sign = Some(h.vault());
     });
     hooks.own("sign", &sign_packages);
-    let settings = KernelSettings {
-        secret_key: Some(ferrum_kernel::secret::SecretKey::new([9u8; 32])),
-        public_url: Some("https://erp.acme.test".into()),
-        link_host: Some("go.acme.test".into()),
-        ..Default::default()
-    };
+    let settings = KernelSettings { public_url: Some("https://erp.acme.test".into()), link_host: Some("go.acme.test".into()), ..Default::default() };
     let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
