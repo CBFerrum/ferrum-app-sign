@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4
+
+Needs the same platform as 0.3.3. No database change. Interface only, `ui/dist` rebuilt with Ferrum-Frontend `06bd1a2`.
+
+- The two routes to the screens apps no longer have (`apps/:app/settings`, `x/:app/:page`) are gone.
+- The page starts through the frontend's `mountApp`; the
+  interface lint has no baseline file any more.
+
 ## 0.3.3
 
 * **Sign reads its signing key with its own handle on the vault**, in the same transaction as before, instead of the
