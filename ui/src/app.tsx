@@ -3,24 +3,18 @@
 // reports) in the records frame, Sign's modules in the sidebar under the platform's bar. A signer's
 // page is another file (public.tsx): it has no sign-in and loads none of this.
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode, useEffect } from "react";
-import { createRoot } from "react-dom/client";
-import { createBrowserRouter, Link, RouterProvider, useRouteError } from "react-router";
-import { routeBase, shell, t, wordsReady } from "@ferrum/client";
-import { ConfirmHost, StatePanel, Toaster } from "@ferrum/kit";
-import { RequireAuth, setFrameMode } from "@ferrum/records/frame";
+import { useEffect } from "react";
+import { Link, useRouteError } from "react-router";
+import { shell, t } from "@ferrum/client";
+import { StatePanel } from "@ferrum/kit";
+import { mountApp, RequireAuth, setFrameMode } from "@ferrum/records/frame";
 import { Requests } from "./Requests";
 
 /** A page of the records frame, loaded when first opened. */
-const page = (name: "FormView" | "ListView" | "ReportView" | "AppSettingsPage" | "ScreenPage") => () => import("./records").then((m) => ({ Component: m[name] }));
+const page = (name: "FormView" | "ListView" | "ReportView") => () => import("./records").then((m) => ({ Component: m[name] }));
 
 /** Sign's packages: the sidebar shows their modules. */
 const SIGN_PACKAGES = ["sign"];
-
-const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, staleTime: 30_000 } },
-});
 
 function RouteError() {
   return <StatePanel kind="failed" error={useRouteError()} onRetry={() => window.location.reload()} />;
@@ -40,8 +34,9 @@ function Started() {
 
 setFrameMode("app", SIGN_PACKAGES);
 
-const router = createBrowserRouter(
-  [
+mountApp({
+  route: "sign",
+  routes: [
     {
       path: "/",
       element: (
@@ -61,24 +56,8 @@ const router = createBrowserRouter(
         { path: "e/:entity", lazy: page("ListView") },
         { path: "e/:entity/:id", lazy: page("FormView") },
         { path: "r/:name", lazy: page("ReportView") },
-        { path: "apps/:app/settings", lazy: page("AppSettingsPage") },
-        { path: "x/:app/:page", lazy: page("ScreenPage") },
         { path: "*", element: <NotFound /> },
       ],
     },
   ],
-  { basename: routeBase("sign") },
-);
-
-// Drawn once the page's words are in (its language's catalogs, fetched as the page starts).
-void wordsReady().then(() =>
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-        <Toaster />
-        <ConfirmHost />
-      </QueryClientProvider>
-    </StrictMode>,
-  ),
-);
+});

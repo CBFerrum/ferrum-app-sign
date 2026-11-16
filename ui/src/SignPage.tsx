@@ -182,6 +182,7 @@ export function SigningPage() {
                 </>
               )}
               <dt>{tr("Signed")}</dt>
+              {/* ui-lint-allow browser-zone: the signer's own clock, as the signer's page tells the deadline (time.ts) */}
               <dd>{isolate(phase.at.toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" }))}</dd>
             </dl>
             <p className="muted" style={{ maxWidth: "34rem" }}>

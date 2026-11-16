@@ -34,5 +34,6 @@ export function moment(iso: string | null | undefined): string {
 export function deadline(iso: string | null | undefined): string {
   const t = iso ? new Date(iso) : null;
   if (!t || Number.isNaN(t.getTime())) return "";
+  // ui-lint-allow browser-zone: the signer's page tells a deadline on the signer's own clock, its zone named (see the top)
   return t.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
 }
