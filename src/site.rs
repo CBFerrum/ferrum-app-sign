@@ -26,9 +26,15 @@ fn header<'a>(req: &'a SiteRequest, name: &str) -> Option<&'a str> {
 
 #[async_trait]
 impl Site for SignSite {
-    /// `POST /verify` takes a whole PDF; the signing endpoints check their own, smaller limit.
+    /// The signing endpoints take small JSON; the largest is a signature, which `signing::sign`
+    /// holds to the same limit.
     fn max_body(&self) -> usize {
-        pdf::MAX_BYTES + 64 * 1024
+        signing::MAX_SIGN_BODY
+    }
+
+    /// `POST /verify` takes a whole PDF, the only route here that does.
+    fn max_body_for(&self, method: &str, path: &str) -> usize {
+        if method == "POST" && path.trim_matches('/') == "verify" { pdf::MAX_BYTES + 64 * 1024 } else { self.max_body() }
     }
 
     async fn handle(&self, k: &Kernel, req: SiteRequest) -> Result<SiteResponse> {
@@ -292,6 +298,18 @@ label.check{display:flex;gap:8px;align-items:flex-start;font-weight:400}ul{paddi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_verify_takes_a_whole_pdf() {
+        for (method, path) in
+            [("POST", "signing/abc/sign"), ("POST", "/signing/abc/decline"), ("POST", "signing/abc/code"), ("GET", "verify"), ("POST", "verify/x")]
+        {
+            assert_eq!(SignSite.max_body_for(method, path), signing::MAX_SIGN_BODY, "{method} {path}");
+        }
+        for path in ["verify", "/verify"] {
+            assert!(SignSite.max_body_for("POST", path) >= pdf::MAX_BYTES, "POST {path} takes a PDF");
+        }
+    }
 
     #[test]
     fn the_page_runs_only_its_own_script() {
