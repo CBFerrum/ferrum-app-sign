@@ -1,8 +1,8 @@
 id: sign
 name: Sign
-version: 0.3.4
+version: 0.3.5
 publisher: cbferrum
-summary: "Electronic signatures: send PDFs for signing in order, place fields, sign by secure link, sealed PDFs with an audit trail and certificate"
+summary: "Simple electronic signature (not certificate-based or qualified): send PDFs for signing in order, place fields, sign by secure link, sealed PDFs with an audit trail"
 description: README.md
 categories: [productivity]
 license: AGPL-3.0-only

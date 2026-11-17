@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.5
+
+Needs the same platform as 0.3.4. No database change, interface unchanged.
+
+- **Sign says what kind of signature it is.** The store card, the install dialog and the top of the README now state that
+  Sign is a simple electronic signature with an audit trail, suited to internal approvals and agreements where a simple
+  signature is accepted, and not a certificate-based, advanced or qualified one. Nothing about the signature itself changed.
+- **The public signing routes take small requests.** Every route accepted a body of about 25 MB, so a signing link
+  made the server read that much per request. Signing, declining, one-time codes and reassigning now take at most 1 MB
+  (the signature image already could not be larger); only `POST /verify`, which takes a whole PDF, takes the large size.
+
 ## 0.3.4
 
 Needs the same platform as 0.3.3. No database change. Interface only, `ui/dist` rebuilt with Ferrum-Frontend `06bd1a2`.

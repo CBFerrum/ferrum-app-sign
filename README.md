@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.3.4-4f46e5?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.5-4f46e5?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 [![CI](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml)
@@ -18,10 +18,10 @@
 
 ### Send a PDF for signature, follow it, and keep a sealed copy with its evidence.
 
-Ferrum Sign is for teams that send contracts, offers, forms and approvals to be signed and want to do it from their own server instead of paying per envelope. It replaces DocuSign, Adobe Acrobat Sign, Dropbox Sign and Zoho Sign for the common case, an electronic signature with a strong audit trail, and it links every request to the record it is about.
-
 > [!IMPORTANT]
-> Sign makes a **simple electronic signature with an audit trail**. It is not a PAdES, advanced or qualified digital signature: no signing certificate, signature device or timestamp authority is used, and no certificate-based signature is embedded in the PDF. The signing page and the certificate say so. If your law or customer requires a qualified signature, do not use Sign for that document.
+> Sign is a **simple electronic signature** with an audit trail: a person agrees and signs on a secure link, and Sign records who, when, from where and what, but it does not prove who they are beyond the link and its optional access code. That suits internal approvals and agreements where a simple signature is accepted. It is not a certificate-based, PAdES, advanced or qualified signature: no signing certificate, signature device, identity provider or timestamp authority is used, and nothing of the kind is embedded in the PDF. The signing page and the certificate say so. If your law or customer requires a qualified signature, do not use Sign for that document.
+
+Ferrum Sign is for teams that send contracts, offers, forms and approvals to be signed and want to do it from their own server instead of paying per envelope. It replaces DocuSign, Adobe Acrobat Sign, Dropbox Sign and Zoho Sign for the common case, an electronic signature with a strong audit trail, and it links every request to the record it is about.
 
 [💡 Why](#-why-ferrum-sign) · [📸 Screenshots](#-screenshots) · [✨ Features](#-features) · [📊 Compare](#-how-it-compares) · [📍 Roadmap](#-roadmap) · [🚀 Install](#-install) · [🔧 Develop](#-develop)
 
@@ -41,7 +41,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 
 | | |
 |---|---|
-| 📦 **Version** | 0.3.4 |
+| 📦 **Version** | 0.3.5 |
 | 🖥️ **Kind** | Its own interface at `/sign/` and a page for signers at `/sign/s/{workspace}/{token}`, with Ferrum's records screens for the rest |
 | ➕ **What it adds** | 7 entities in one package, 2 roles, 3 reports, a launcher app, a Create menu entry, one message template, 4 events other apps can follow, an assistant |
 | 🧱 **Depends on** | The platform's `core` package. Nothing else is required |
@@ -356,6 +356,7 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 
 ### ✅ Recently shipped
 
+- [x] **0.3.5**: Sign says plainly that it is a simple electronic signature, in the store card and at the top of this page; the signing endpoints take at most 1 MB a request, and only the verify route takes a whole PDF.
 - [x] **0.3.3**: Sign reads its signing key with its own handle on the platform's vault.
 - [x] **0.3.4**: Rebuilt on Ferrum-Frontend 06bd1a2: its start through `mountApp`, and no routes to the screens apps no longer have.
 - [x] **0.3.2**: A signer's link goes through the operator's link host when Sign and Mail have no address of their own.
@@ -471,7 +472,7 @@ CHANGELOG.md          what changed in each version
 
 ## 📜 Changelog
 
-Every release is described in [CHANGELOG.md](CHANGELOG.md). The latest is **0.3.4**, rebuilt on Ferrum-Frontend 06bd1a2; **0.3.2** gave signer links the platform's stable address, and **0.3.0** added one-time codes, copy-only recipients, signing groups and signing from any record.
+Every release is described in [CHANGELOG.md](CHANGELOG.md). The latest is **0.3.5**, which labels Sign a simple electronic signature and caps the public routes' request size; **0.3.4** rebuilt on Ferrum-Frontend 06bd1a2; **0.3.2** gave signer links the platform's stable address, and **0.3.0** added one-time codes, copy-only recipients, signing groups and signing from any record.
 
 ## 🤝 Contributing
 
