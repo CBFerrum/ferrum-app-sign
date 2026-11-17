@@ -14,14 +14,14 @@
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-data-336791?style=flat-square&logo=postgresql&logoColor=white)
 ![React](https://img.shields.io/badge/React%20%2B%20TypeScript-interface-0ea5e9?style=flat-square&logo=react&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-19%20Rust%20%C2%B7%20107%20interface-16a34a?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-20%20Rust%20%C2%B7%20107%20interface-16a34a?style=flat-square)
 
 ### Send a PDF for signature, follow it, and keep a sealed copy with its evidence.
 
 Ferrum Sign is for teams that send contracts, offers, forms and approvals to be signed and want to do it from their own server instead of paying per envelope. It replaces DocuSign, Adobe Acrobat Sign, Dropbox Sign and Zoho Sign for the common case, an electronic signature with a strong audit trail, and it links every request to the record it is about.
 
 > [!IMPORTANT]
-> Sign makes an **electronic signature with an audit trail**. It is not a PAdES, advanced or qualified digital signature, and no certificate-based signature is embedded in the PDF. The signing page says so. If your law or customer requires a qualified signature, do not use Sign for that document.
+> Sign makes a **simple electronic signature with an audit trail**. It is not a PAdES, advanced or qualified digital signature: no signing certificate, signature device or timestamp authority is used, and no certificate-based signature is embedded in the PDF. The signing page and the certificate say so. If your law or customer requires a qualified signature, do not use Sign for that document.
 
 [💡 Why](#-why-ferrum-sign) · [📸 Screenshots](#-screenshots) · [✨ Features](#-features) · [📊 Compare](#-how-it-compares) · [📍 Roadmap](#-roadmap) · [🚀 Install](#-install) · [🔧 Develop](#-develop)
 
@@ -41,13 +41,13 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 
 | | |
 |---|---|
-| 📦 **Version** | 0.3.2 |
+| 📦 **Version** | 0.3.4 |
 | 🖥️ **Kind** | Its own interface at `/sign/` and a page for signers at `/sign/s/{workspace}/{token}`, with Ferrum's records screens for the rest |
 | ➕ **What it adds** | 7 entities in one package, 2 roles, 3 reports, a launcher app, a Create menu entry, one message template, 4 events other apps can follow, an assistant |
 | 🧱 **Depends on** | The platform's `core` package. Nothing else is required |
 | 🤝 **Works with** | Mail (emails are Communications on the request, sent and retried by Mail), Contracts (follows a signature), any record a request is about |
 | 🌍 **Languages** | English, Arabic, Hindi |
-| 🧪 **Tests** | 19 Rust test functions and 107 interface tests, counted from the source |
+| 🧪 **Tests** | 20 Rust test functions and 107 interface tests, counted from the source |
 | 📄 **Licence** | AGPL-3.0-only |
 
 ## 📸 Screenshots
@@ -126,7 +126,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 - **Decline with a reason.** The request ends for everyone and the sender is told.
 - **Reassign.** When the sender allows it, a signer can hand over to a colleague (an event is recorded).
 - **Plain answers when a link cannot be used.** The page says plainly when a link is spent, withdrawn, expired or not yet the signer's turn.
-- **The kind of signature, said openly.** The page and the certificate say that this is an electronic signature with an audit trail, not a PAdES, advanced or qualified one, and how each signer was checked.
+- **The kind of signature, said openly.** The page and the certificate say that this is a simple electronic signature with an audit trail, not a PAdES, advanced or qualified one, and how each signer was checked.
 - **Real pages.** Every page of the document is drawn in the browser (with pdf.js, loaded only when a document opens), so signers read each page where they sign.
 - **Safe and repeatable.** Each submission locks the request; a repeated identical submission (a retry after a lost answer) returns the first answer and changes nothing; signers of a parallel request may sign at the same moment and the document is sealed once.
 
@@ -284,6 +284,8 @@ Sign is ordinary Ferrum metadata and Rust, so requests get lists, forms, search,
 | Webhooks and automations | `request_completed`, `request_declined`, `request_expired`, `request_failed` | Platform webhooks |
 | Public verification | Anyone can check a PDF against the stored original | Nothing |
 
+**What the tests exercise.** The tests send emails through Mail's own queue (a Communication), not to a real mail server. One-time codes by text message are read from the platform's test channel, not a real text-message provider. No PDF service runs in them: a generated page is only checked to be refused, naming the missing service. PDF parsing, stamping and sealing run for real.
+
 ## 📊 How it compares
 
 Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and Documenso, the open-source option.
@@ -354,13 +356,14 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 
 ### ✅ Recently shipped
 
+- [x] **0.3.3**: Sign reads its signing key with its own handle on the platform's vault.
 - [x] **0.3.4**: Rebuilt on Ferrum-Frontend 06bd1a2: its start through `mountApp`, and no routes to the screens apps no longer have.
 - [x] **0.3.2**: A signer's link goes through the operator's link host when Sign and Mail have no address of their own.
 - [x] **0.3.1**: A page can no longer start a signature; a request that cannot be sent raises an event; a test for one-time codes.
 - [x] **0.3.0**: One-time codes by email or text, copy-only recipients, signing groups, reassigning, per-request reminders, sign from any record, events for completed, declined and expired requests, and the kind of signature on the certificate.
 - [x] **0.2.19 to 0.2.18**: The upgraded design system and lighter first page.
 - [x] **0.2.17 to 0.2.10**: Names, words and reports in Arabic and Hindi, right to left, times on a person's own clock.
-- [x] **0.2.0**: The signer's page, the sending flow with placed fields, following a request, and emails that no longer need the Mail app.
+- [x] **0.2.0**: The signer's page, the sending flow with placed fields, following a request, and emails that go through the server's mailer when the Mail app is not installed.
 - [x] **0.1.0**: First release: requests, templates, sealed PDFs with a certificate and a hash-chained trail.
 
 ### 🔜 Next up
