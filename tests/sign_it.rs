@@ -369,8 +369,8 @@ impl T {
         ferrum_domain::reports::run(&self.k, ctx, name, &p).await.unwrap_or_else(|e| panic!("report {name}: {e:?}"))
     }
 
-    async fn maintenance(&self) {
-        ferrum_app_sign::maintenance(&self.k).await.expect("maintenance");
+    async fn maintenance(&self, tenant: &Tenant) {
+        ferrum_app_sign::maintenance(&self.k, tenant.id).await.expect("maintenance");
     }
 }
 
@@ -860,8 +860,8 @@ async fn scenario() {
     t.sql(&acme, "update e_sign_request set expires_at = now() - interval '1 minute' where tenant_id = $1 and id = $2", quote_id).await.unwrap();
     let (status, gone) = t.view(&acme, &quote_token, None).await.unwrap();
     assert!(status == 410 && gone["message"].as_str().unwrap().contains("expired"), "an expired link is refused even before maintenance runs");
-    t.maintenance().await;
-    t.maintenance().await;
+    t.maintenance(&acme).await;
+    t.maintenance(&acme).await;
     assert_eq!(t.get(&asha, "SignRequest", quote_id).await["status"], json!("Expired"));
     assert_eq!(t.trail(&acme, quote_id).await.iter().filter(|e| *e == "Expired").count(), 1, "expired once");
     assert!(t.notifications(&acme, &asha).await.iter().any(|(title, _)| title.ends_with("expired before everyone signed")));
@@ -871,23 +871,23 @@ async fn scenario() {
         t.k.insert(&asha, "SignRequest", obj(one("Deal", "Parallel", two.clone(), two_fields.clone(), t.upload(&asha, "deal.pdf", &pdf).await))).await.unwrap();
     let deal_id = uid(&deal);
     t.action(&asha, deal_id, "send", json!({})).await;
-    t.maintenance().await;
+    t.maintenance(&acme).await;
     assert_eq!(t.count(&acme, deal_id, "Reminded").await, 0, "not due yet");
     t.sql(&acme, &format!("update {table} set sent_at = now() - interval '25 hours' where tenant_id = $1 and parent_id = $2"), deal_id).await.unwrap();
-    let (r1, r2) = tokio::join!(ferrum_app_sign::maintenance(&t.k), ferrum_app_sign::maintenance(&t.k));
+    let (r1, r2) = tokio::join!(ferrum_app_sign::maintenance(&t.k, acme.id), ferrum_app_sign::maintenance(&t.k, acme.id));
     r1.unwrap();
     r2.unwrap();
-    t.maintenance().await;
+    t.maintenance(&acme).await;
     assert_eq!(t.count(&acme, deal_id, "Reminded").await, 2, "one reminder for each of the two signers, even with concurrent runs");
     let deal = t.get(&asha, "SignRequest", deal_id).await;
     assert_eq!((signer_row(&deal, "A")["reminders_sent"].clone(), signer_row(&deal, "B")["reminders_sent"].clone()), (json!(1), json!(1)));
     assert!(t.notifications(&acme, &asha).await.iter().any(|(title, _)| title == "Ann Lee has not signed yet" || title.starts_with("Ann Lee has not signed")));
     t.sql(&acme, &format!("update {table} set last_reminded_at = now() - interval '25 hours' where tenant_id = $1 and parent_id = $2"), deal_id).await.unwrap();
-    t.maintenance().await;
-    t.maintenance().await;
+    t.maintenance(&acme).await;
+    t.maintenance(&acme).await;
     assert_eq!(t.count(&acme, deal_id, "Reminded").await, 4, "the second round");
     t.sql(&acme, &format!("update {table} set last_reminded_at = now() - interval '25 hours' where tenant_id = $1 and parent_id = $2"), deal_id).await.unwrap();
-    t.maintenance().await;
+    t.maintenance(&acme).await;
     assert_eq!(t.count(&acme, deal_id, "Reminded").await, 4, "no more than max_reminders (2) per signer");
     let manual = t.action(&asha, deal_id, "remind", json!({})).await;
     assert_eq!(manual["reminded"].as_array().unwrap().len(), 2, "the sender can still remind by hand");
@@ -1114,7 +1114,7 @@ async fn scenario() {
     let quiet_id = uid(&t.k.insert(&asha, "SignRequest", obj(quiet)).await.unwrap());
     t.action(&asha, quiet_id, "send", json!({})).await;
     t.sql(&acme, "update e_sign_request__signers set sent_at = now() - interval '5 days' where tenant_id = $1 and parent_id = $2", quiet_id).await.unwrap();
-    t.maintenance().await;
+    t.maintenance(&acme).await;
     assert_eq!(t.count(&acme, quiet_id, "Reminded").await, 0, "its own setting: no reminders, though the workspace reminds daily");
 
     // ───────────── a workspace's own record sent for signature by configuration only (DC-47) ─────────────
@@ -1153,7 +1153,7 @@ async fn scenario() {
     let q_id = uid(&q);
     t.k.run_action(&admin, "XQuote", q_id, "x_send_to_sign", Value::Null).await.expect("sent by its button");
     // Its file was generated in the button's own transaction: upkeep adds the page and sends it once that commits.
-    t.maintenance().await;
+    t.maintenance(&acme).await;
     assert_eq!(t.get(&admin, "XQuote", q_id).await["status"], json!("Out for Signature"));
     let made = t.list(&mira, "SignRequest", json!({"reference_entity": "XQuote", "reference_id": q_id.to_string()})).await;
     assert_eq!(made.len(), 1);
@@ -1271,7 +1271,7 @@ async fn no_pdf_service() {
     let q_id = uid(&q);
     let said = refused(t.k.run_action(&admin, "XQuote", q_id, "x_send_to_sign", Value::Null).await, "invalid");
     assert!(said.contains("FERRUM_PDF_URL"), "the person is told which service is missing: {said}");
-    t.maintenance().await;
+    t.maintenance(&acme).await;
     assert_eq!(t.get(&admin, "XQuote", q_id).await["status"], json!("Open"), "the record stays where it was");
     assert!(t.list(&t.sys(&acme), "SignRequest", json!({})).await.is_empty(), "no orphan request");
     let files: i64 = t.scalar(&acme, "select count(*) from file_object where tenant_id = $1 and record_id = $2", q_id).await;
