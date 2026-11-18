@@ -1,6 +1,6 @@
 id: sign
 name: Sign
-version: 0.3.5
+version: 0.4.0
 publisher: cbferrum
 summary: "Simple electronic signature (not certificate-based or qualified): send PDFs for signing in order, place fields, sign by secure link, sealed PDFs with an audit trail"
 description: README.md
@@ -9,7 +9,7 @@ license: AGPL-3.0-only
 homepage: https://github.com/CBFerrum/ferrum-app-sign
 support: https://github.com/CBFerrum/ferrum-app-sign/issues
 runtime: native
-platform: ">=0.3.8, <0.4"
+platform: ">=0.4.0, <0.5"
 packages: [sign]
 uninstall: ask
 # Its own interface at /sign/ (Ferrum docs/plan/apps-ui.md): the requests and where each one stands,

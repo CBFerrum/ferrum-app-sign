@@ -78,10 +78,10 @@ pub fn reports() -> Vec<Arc<dyn ReportSource>> {
     vec![Arc::new(reports::SignReports)]
 }
 
-/// Periodic upkeep: every minute, on one replica at a time (advisory lock); must be idempotent and cheap.
+/// Upkeep for one workspace, called by the platform as it comes due; must be idempotent and cheap.
 /// Expires overdue requests, sends due reminders (each once) and retries sealing that failed.
-pub async fn maintenance(k: &Kernel) -> Result<()> {
-    upkeep::run(k).await
+pub async fn maintenance(k: &Kernel, tenant: Uuid) -> Result<()> {
+    upkeep::run(k, tenant).await
 }
 
 // ───────────────────────────── shared helpers ─────────────────────────────

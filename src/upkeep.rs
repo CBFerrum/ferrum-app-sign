@@ -6,7 +6,7 @@
 use crate::event::{self, Entry};
 use crate::notice::{self, Outbox};
 use crate::request::{OPEN, obj, set_signer};
-use crate::{PACKAGE, child_table, human, int, now, rows, s, seal, settings, time, ts};
+use crate::{child_table, human, int, now, rows, s, seal, settings, time, ts};
 use chrono::Duration;
 use ferrum_kernel::{Ctx, Error, Kernel, Result, with_retry};
 use serde_json::json;
@@ -17,37 +17,22 @@ const BATCH: i64 = 100;
 /// Sealing is retried this long after the request last changed (the last signature seals at once).
 const SEAL_RETRY_MINUTES: i64 = 2;
 
-pub async fn run(k: &Kernel) -> Result<()> {
-    let mut tx = k.db.system_tx().await?;
-    let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active' order by id").fetch_all(&mut *tx).await?;
-    tx.commit().await?;
+pub async fn run(k: &Kernel, tenant: Uuid) -> Result<()> {
+    let ctx = Ctx::system(tenant, k.registry.schema(tenant).await?);
     let mut first_error = None;
-    for tenant in tenants {
-        let schema = match k.registry.schema(tenant).await {
-            Ok(s) => s,
+    let steps = [
+        ("sending", crate::envelope::send_pending(k, &ctx).await),
+        ("expiry", expire(k, &ctx).await),
+        ("reminders", remind(k, &ctx).await),
+        ("sealing", reseal(k, &ctx).await),
+    ];
+    for (step, outcome) in steps {
+        match outcome {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(%tenant, step, n, "sign maintenance"),
             Err(e) => {
+                tracing::warn!(%tenant, step, "sign maintenance failed: {e}");
                 first_error.get_or_insert(e);
-                continue;
-            }
-        };
-        if !schema.packages.iter().any(|p| p == PACKAGE) {
-            continue;
-        }
-        let ctx = Ctx::system(tenant, schema);
-        let steps = [
-            ("sending", crate::envelope::send_pending(k, &ctx).await),
-            ("expiry", expire(k, &ctx).await),
-            ("reminders", remind(k, &ctx).await),
-            ("sealing", reseal(k, &ctx).await),
-        ];
-        for (step, outcome) in steps {
-            match outcome {
-                Ok(0) => {}
-                Ok(n) => tracing::info!(%tenant, step, n, "sign maintenance"),
-                Err(e) => {
-                    tracing::warn!(%tenant, step, "sign maintenance failed: {e}");
-                    first_error.get_or_insert(e);
-                }
             }
         }
     }
