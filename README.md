@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.4.0-4f46e5?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.1-4f46e5?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 [![CI](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml)
@@ -41,7 +41,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 
 | | |
 |---|---|
-| 📦 **Version** | 0.4.0 |
+| 📦 **Version** | 0.4.1 |
 | 🖥️ **Kind** | Its own interface at `/sign/` and a page for signers at `/sign/s/{workspace}/{token}`, with Ferrum's records screens for the rest |
 | ➕ **What it adds** | 7 entities in one package, 2 roles, 3 reports, a launcher app, a Create menu entry, one message template, 4 events other apps can follow, an assistant |
 | 🧱 **Depends on** | The platform's `core` package. Nothing else is required |
@@ -356,6 +356,7 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 
 ### ✅ Recently shipped
 
+- [x] **0.4.1** A failed seal is retried for requests with copies or groups; a request is never Completed without its seal; failures reach a person.
 - [x] **0.4.0** Upkeep is one workspace's: needs Ferrum 0.4.0.
 - [x] **0.3.5**: Sign says plainly that it is a simple electronic signature, in the store card and at the top of this page; the signing endpoints take at most 1 MB a request, and only the verify route takes a whole PDF.
 - [x] **0.3.3**: Sign reads its signing key with its own handle on the platform's vault.

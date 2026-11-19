@@ -178,9 +178,22 @@ async fn email(
     k.insert_tx(ctx, tx, "Communication", doc).await.map(|_| ())
 }
 
-/// An in-app notification to the request's sender.
+/// An in-app notification to the request's sender; for a request no person made (a configured step's, the system's),
+/// to every active Sign Manager, so what needs someone is never told to nobody.
 pub async fn notify_sender(tx: &mut Tx, tenant: Uuid, request: &Doc, title: &str, body: Option<&str>) -> Result<()> {
-    if let Some(user) = id(request, "created_by") {
+    let users = match id(request, "created_by").filter(|u| !u.is_nil()) {
+        Some(user) => vec![user],
+        None => {
+            sqlx::query_scalar(
+                "select ur.user_id from user_role ur join app_user u on u.tenant_id = ur.tenant_id and u.id = ur.user_id \
+             where ur.tenant_id = $1 and ur.role = 'Sign Manager' and u.is_active and (ur.expires_at is null or ur.expires_at > now())",
+            )
+            .bind(tenant)
+            .fetch_all(&mut **tx)
+            .await?
+        }
+    };
+    for user in users {
         ferrum_kernel::notify::send(tx, tenant, user, title, body, Some("SignRequest"), Some(doc_id(request)?)).await?;
     }
     Ok(())

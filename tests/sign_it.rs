@@ -1335,6 +1335,118 @@ async fn link_host() {
     assert!(link.starts_with("https://sign.acme.test/api/site/acme/sign/s/"), "{link}");
 }
 
+/// A kernel with Sign alone on the suite's database, emptied first.
+async fn boot(settings: KernelSettings) -> T {
+    let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 16, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
+    let mut packages = ferrum_domain::packages().expect("platform packages");
+    packages.extend(ferrum_app_sign::packages().expect("app packages"));
+    let mut hooks = HookRegistry::default();
+    ferrum_domain::register(&mut hooks);
+    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    let mut sign = None;
+    hooks.app("sign", &sign_packages, |h| {
+        ferrum_app_sign::register(h);
+        sign = Some(h.vault());
+    });
+    hooks.own("sign", &sign_packages);
+    let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
+    let store = Arc::new(MemStore::default());
+    k.set_file_store(store.clone());
+    T { k, store, sign: sign.expect("Sign's handle") }
+}
+
+fn run(scenario: impl std::future::Future<Output = ()> + Send + 'static) {
+    let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
+    rt.block_on(async { tokio::spawn(scenario).await.unwrap() });
+}
+
+#[test]
+fn a_failed_seal_is_retried_with_a_copy_recipient_and_a_group() {
+    run(seal_retries());
+}
+
+/// sign-1: a request whose seal failed is retried by upkeep until it is sealed, once, whoever else is on it (a
+/// recipient of a copy never signs; a group's other members are Not Needed). While it fails, a person is told why
+/// (the sender, or the Sign Managers for a request no person made), once, and the reason stays on the request. And no
+/// request is ever Completed without its seal: the database refuses it.
+async fn seal_retries() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
+    let pdf = contract_pdf("Retry");
+    let backdate = |id: Uuid| {
+        let t = &t;
+        let acme = &acme;
+        async move {
+            t.sql(acme, "update e_sign_request set updated_at = now() - interval '5 minutes' where tenant_id = $1 and id = $2", id).await.unwrap();
+        }
+    };
+    let copy = json!({"title": "With a copy", "signers": [
+            {"role": "Client", "name": "Cleo", "email": "cleo@client.test"},
+            {"role": "Auditor", "name": "Aud", "email": "aud@audit.test", "action": "Receive a Copy"}],
+        "fields": [field("Client", "Signature", "C", 1, 72, 600, 200, 50)]});
+    let group = json!({"title": "With a group", "signers": [
+            {"role": "Director A", "name": "Dee", "email": "dee@board.test", "signing_group": "Directors"},
+            {"role": "Director B", "name": "Dan", "email": "dan@board.test", "signing_group": "Directors"}],
+        "fields": [field("Director A", "Signature", "DA", 1, 72, 100, 200, 50), field("Director B", "Signature", "DB", 1, 320, 100, 200, 50)]});
+    // The group's request is made by no person (as a configured step's may be): its failure goes to the managers.
+    let sys = t.sys(&acme);
+    for (mut draft, who, by_person) in [(copy, "Client", true), (group, "Director A", false)] {
+        draft["document"] = json!(t.upload(&asha, "retry.pdf", &pdf).await);
+        let ctx = if by_person { asha.clone() } else { sys.clone() };
+        let id = uid(&t.k.insert(&ctx, "SignRequest", obj(draft)).await.unwrap());
+        let sent = t.k.run_action(&ctx, "SignRequest", id, "send", json!({})).await.unwrap();
+        let link = sent["signers"].as_array().unwrap().iter().find(|l| l["role"] == json!(who)).unwrap()["url"].as_str().unwrap().to_string();
+        let original: Uuid = t.get(&sys, "SignRequest", id).await["document"].as_str().unwrap()[7..].parse().unwrap();
+
+        // The last signature cannot be sealed: the stored original was changed.
+        let kept = t.store.tamper(original);
+        let (status, signed) = t.sign(&acme, &token_of(&link), None, json!({"consent": true, "signature": {"text": "Signer"}})).await.unwrap();
+        assert_eq!((status, signed["request_status"].clone()), (200, json!("In Progress")), "{who}: signed, not sealed");
+        let r = t.get(&sys, "SignRequest", id).await;
+        assert!(r["sealed_document"].is_null() && r["seal_error"].as_str().unwrap().contains("no longer matches"), "{who}: the reason is kept");
+        let told = if by_person { &asha } else { &mira };
+        let notices = |n: Vec<(String, Option<String>)>| -> Vec<Option<String>> {
+            n.into_iter().filter(|(title, _)| title.contains("could not be sealed")).map(|(_, b)| b).collect()
+        };
+        let first = notices(t.notifications(&acme, told).await);
+        assert_eq!(first.len(), 1, "{who}: a person is told");
+        assert!(first[0].as_deref().unwrap_or_default().contains("no longer matches"), "{who}: with the reason");
+
+        // Still failing: upkeep tries again, says it failed, keeps the reason, tells nobody twice.
+        backdate(id).await;
+        let again = ferrum_app_sign::maintenance(&t.k, acme.id).await;
+        assert!(again.as_ref().is_err_and(|e| e.to_string().contains("sealing failed")), "{who}: upkeep tried and failed: {again:?}");
+        assert_eq!(t.get(&sys, "SignRequest", id).await["status"], json!("In Progress"));
+        assert_eq!(notices(t.notifications(&acme, told).await).len(), 1, "{who}: told once");
+
+        // No path completes it without its seal, not even a write straight to the table.
+        let bare = t.sql(&acme, "update e_sign_request set status = 'Completed' where tenant_id = $1 and id = $2", id).await;
+        assert!(bare.is_err(), "{who}: the database refuses Completed without a seal");
+        let _ = t.k.update(&mira, "SignRequest", id, obj(json!({"status": "Completed"})), None).await;
+        assert_eq!(t.get(&sys, "SignRequest", id).await["status"], json!("In Progress"), "{who}: a manager cannot complete it either");
+
+        // Mended: the next upkeep seals it, once, however many run at the same moment.
+        t.store.restore(original, kept);
+        backdate(id).await;
+        let (a, b) = tokio::join!(ferrum_app_sign::maintenance(&t.k, acme.id), ferrum_app_sign::maintenance(&t.k, acme.id));
+        a.expect("upkeep");
+        b.expect("upkeep");
+        t.maintenance(&acme).await;
+        let r = t.get(&sys, "SignRequest", id).await;
+        assert_eq!(r["status"], json!("Completed"), "{who}: retried and sealed");
+        assert!(r["sealed_document"].is_string() && r["sealed_sha256"].is_string() && r["seal_error"].is_null());
+        assert_eq!(t.count(&acme, id, "Completed").await, 1, "{who}: sealed exactly once");
+        let sealed: i64 = t.scalar(&acme, "select count(*) from outbox where tenant_id = $1 and topic = 'sign.request_completed' and record_id = $2", id).await;
+        assert_eq!(sealed, 1, "{who}: completed once on the outbox");
+    }
+}
+
 /// What opens the test's vault: the database password of `url`, with Argon2id kept cheap for tests.
 fn opener(url: &str) -> ferrum_kernel::vault::Opener {
     ferrum_kernel::vault::Opener {

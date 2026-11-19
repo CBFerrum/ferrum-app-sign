@@ -14,7 +14,8 @@ use uuid::Uuid;
 
 /// Items handled per tenant and step in one round.
 const BATCH: i64 = 100;
-/// Sealing is retried this long after the request last changed (the last signature seals at once).
+/// Sealing is retried this long after the request last changed (the last signature seals at once). Which requests wait
+/// for it is `seal::ready` in SQL: in progress, unsealed, signed by everyone who signs (`request::signed_by_all`).
 const SEAL_RETRY_MINUTES: i64 = 2;
 
 pub async fn run(k: &Kernel, tenant: Uuid) -> Result<()> {
@@ -156,7 +157,9 @@ async fn reseal(k: &Kernel, ctx: &Ctx) -> Result<usize> {
     let ids: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "select r.id from e_sign_request r where r.tenant_id = $1 and r.status = 'In Progress' and r.sealed_document is null \
          and r.updated_at < now() - make_interval(mins => {SEAL_RETRY_MINUTES}) \
-         and not exists (select 1 from {signers} s where s.tenant_id = r.tenant_id and s.parent_id = r.id and s.status is distinct from 'Signed') \
+         and exists (select 1 from {signers} s where s.tenant_id = r.tenant_id and s.parent_id = r.id and s.status = 'Signed') \
+         and not exists (select 1 from {signers} s where s.tenant_id = r.tenant_id and s.parent_id = r.id and s.status is distinct from 'Signed' \
+           and s.status is distinct from 'Not Needed' and s.action is distinct from 'Receive a Copy') \
          order by r.updated_at limit 20"
     )))
     .bind(ctx.tenant)

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.1
+
+Needs the same platform as 0.4.0. One database change: `packages/sign/sql/002_completed_is_sealed.sql` adds a check. No
+interface change.
+
+- **A seal that failed is retried for every request.** Upkeep retried sealing only when every row of a request had
+  signed, so a request with a recipient of a copy, or with a signing group whose other members were not needed, stayed
+  In Progress, fully signed and unsealed, after one failed try. It now retries every request that is signed by everyone
+  who signs, and seals it once.
+- **A request is never Completed without its seal.** The database refuses a Completed request with no sealed PDF or no
+  SHA-256, whoever writes it.
+- **A failure always reaches a person.** Notices meant for a request's sender (sealing failed, declined, expired) go to
+  every Sign Manager when no person made the request (a configured step's or the system's).
+
 ## 0.4.0
 
 No database or interface change. Needs Ferrum 0.4.0 (apps' upkeep runs one workspace at a time, on whichever replica is free).
