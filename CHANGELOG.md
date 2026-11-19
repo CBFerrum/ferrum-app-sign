@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2
+
+Needs Ferrum with K0-1 (`reports::readable_choice`). No database or interface change.
+
+- **Reports read only what the caller may read.** Time to Complete grouped by Sender showed senders' addresses to a
+  role whose rules hide them. Each report now refuses a grouping on a field the caller cannot read, and refuses a
+  report whose figures come from one (completion times without `completed_at`, pending signers without `signers`)
+  instead of answering with numbers computed from it.
+
 ## 0.4.1
 
 Needs the same platform as 0.4.0. One database change: `packages/sign/sql/002_completed_is_sealed.sql` adds a check. No

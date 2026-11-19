@@ -462,9 +462,7 @@ async fn scenario() {
     hooks.app("comms", &[], ferrum_app_comms::register);
     let comms_packages: Vec<String> = ferrum_app_comms::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
     hooks.own("comms", &comms_packages);
-    for source in ferrum_app_sign::reports() {
-        ferrum_domain::reports::add_source(source);
-    }
+    ferrum_domain::reports::set_sources(ferrum_app_sign::reports().into_iter().map(|r| ("sign".to_string(), r)).collect()).expect("Sign's reports");
     let settings = KernelSettings { pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
@@ -1337,12 +1335,24 @@ async fn link_host() {
 
 /// A kernel with Sign alone on the suite's database, emptied first.
 async fn boot(settings: KernelSettings) -> T {
+    boot_with(settings, vec![]).await
+}
+
+/// A package of a test's own, from its files.
+fn package(files: &[(&str, &str)]) -> ferrum_meta::Package {
+    let files: std::collections::BTreeMap<String, String> = files.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    ferrum_meta::catalog::load_package_files(&files).expect("the test's package")
+}
+
+/// [`boot`] with packages of the test's own beside Sign's, and Sign's reports.
+async fn boot_with(settings: KernelSettings, extra: Vec<ferrum_meta::Package>) -> T {
     let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
     let db = Db::connect(DbConfig { url: url.clone(), max_connections: 16, ..Default::default() }).await.expect("connect");
     sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
     ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("app packages"));
+    packages.extend(extra);
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
     let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
@@ -1352,10 +1362,56 @@ async fn boot(settings: KernelSettings) -> T {
         sign = Some(h.vault());
     });
     hooks.own("sign", &sign_packages);
+    let reports = ferrum_app_sign::reports().into_iter().map(|r| ("sign".to_string(), r)).collect();
+    ferrum_domain::reports::set_sources(reports).expect("Sign's reports");
     let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
     T { k, store, sign: sign.expect("Sign's handle") }
+}
+
+/// K0-7 (S9): a role that reads Sign Requests but not some of their fields. Reports group, filter and aggregate only on
+/// what the caller may read: a grouping on a hidden field is refused, and a report whose figures come from a hidden field
+/// is refused rather than answered.
+const AUDIT: &str = "package: sign_audit\nversion: 0.1.0\ndepends: [sign]\nroles:\n  - name: Sign Auditor\n    permissions:\n      \
+- {entity: SignRequest, read: true, hide: [sender_email]}\n      - {entity: SignTemplate, read: true}\n  - name: Sign Clerk\n    permissions:\n      \
+- {entity: SignRequest, read: true, hide: [completed_at, signers]}\n";
+
+#[test]
+fn a_report_refuses_grouping_by_a_field_the_caller_cannot_read() {
+    run(reports_by_readable_fields());
+}
+
+async fn reports_by_readable_fields() {
+    let t = boot_with(KernelSettings::default(), vec![package(&[("package.yaml", AUDIT)])]).await;
+    let acme = t.tenant("acme", &["sign", "sign_audit"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let auditor = t.user(&acme, "audit@acme.test", "Ari Auditor", &["Sign Auditor"]).await;
+    let clerk = t.user(&acme, "clerk@acme.test", "Cy Clerk", &["Sign Clerk"]).await;
+    let pdf = contract_pdf("Report");
+    let draft = json!({"title": "Reported", "document": t.upload(&asha, "r.pdf", &pdf).await,
+        "signers": [{"role": "Client", "name": "Cleo", "email": "cleo@client.test"}], "fields": [field("Client", "Signature", "C", 1, 72, 600, 200, 50)]});
+    let id = uid(&t.k.insert(&asha, "SignRequest", obj(draft)).await.unwrap());
+    let sent = t.action(&asha, id, "send", json!({})).await;
+    t.sign(&acme, &token_of(sent["signers"][0]["url"].as_str().unwrap()), None, json!({"consent": true, "signature": {"text": "Cleo"}})).await.unwrap();
+    let run = |ctx: Ctx, name: &'static str, params: Vec<(&'static str, &'static str)>| {
+        let t = &t;
+        async move {
+            let p: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            ferrum_domain::reports::run(&t.k, &ctx, name, &p).await
+        }
+    };
+    // The auditor reads requests but not who sent them: no grouping by sender; by month and template, yes.
+    let m = refused(run(auditor.clone(), "sign_completion_time", vec![("group_by", "Sender")]).await, "forbidden");
+    assert!(m.contains("sender_email"), "{m}");
+    assert_eq!(run(auditor.clone(), "sign_completion_time", vec![]).await.expect("by month")["totals"]["completed"], json!(1));
+    assert_eq!(run(auditor.clone(), "sign_completion_time", vec![("group_by", "Template")]).await.expect("by template")["rows"][0]["completed"], json!(1));
+    // The clerk cannot read when requests completed, nor their signers: the reports made of those are refused, not
+    // answered with figures computed from them; the count by status, which reads neither, is answered.
+    assert!(refused(run(clerk.clone(), "sign_completion_time", vec![]).await, "forbidden").contains("completed_at"));
+    assert!(refused(run(clerk.clone(), "sign_pending_signatures", vec![]).await, "forbidden").contains("signers"));
+    let counts = run(clerk.clone(), "sign_requests_by_status", vec![]).await.expect("by status");
+    assert_eq!(counts["totals"]["requests"], json!(1));
 }
 
 fn run(scenario: impl std::future::Future<Output = ()> + Send + 'static) {
