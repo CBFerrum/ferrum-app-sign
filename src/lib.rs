@@ -15,7 +15,6 @@
 mod document;
 mod envelope;
 mod event;
-pub mod identity;
 mod keys;
 mod notice;
 mod pdf;
@@ -60,17 +59,6 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("SignRequest", Arc::new(request::RequestHook))
         .register("SignEvent", Arc::new(event::EventHook))
         .add_site("sign", site);
-}
-
-/// Sends `values` (a Sign Request's: `title`, `document` as a `/files/<id>` path, `source_sha256`, `signers`,
-/// `reference_entity`, `reference_id`, `message`, `verify_identity`...) for signature at once, about the record it
-/// names, as `ctx` (a person, or the system on someone's behalf). Without fields of its own, a signature page is
-/// added for its signers. Returns the request as stored. The same as creating a Sign Request with
-/// `send_on_create` (the `sign.sign_request.create` capability a configured step invokes).
-pub async fn send_for_signature(k: &Kernel, tx: &mut ferrum_kernel::Tx, ctx: &Ctx, mut values: Doc) -> Result<Doc> {
-    values.insert("send_on_create".into(), Value::Bool(true));
-    let made = k.insert_tx(ctx, tx, "SignRequest", values).await?;
-    k.get_tx(ctx, tx, "SignRequest", doc_id(&made)?, false).await
 }
 
 /// This app's reports.
@@ -187,6 +175,25 @@ mod tests {
             assert!(schema.entity(e).is_some(), "{e}");
         }
         assert!(MANIFEST.contains("packages: [sign]"));
+    }
+
+    /// One path for people and agents: every action a person can press says what it does, what it returns and what
+    /// "done" means (Ferrum docs/guides/06, scripts/agent_parity.py).
+    #[test]
+    fn every_visible_action_has_a_full_contract() {
+        let mut all = ferrum_domain::packages().expect("platform packages");
+        all.extend(super::packages().expect("app packages"));
+        let catalog = ferrum_meta::Catalog::from_packages(all).unwrap_or_else(|e| panic!("{e}"));
+        let schema = ferrum_meta::effective::build(&catalog, &[PACKAGE.to_string()], &[], 1).unwrap_or_else(|e| panic!("{e}"));
+        let mut seen = 0;
+        for name in ["SignSettings", "SignTemplate", "SignRequest", "SignEvent"] {
+            for a in schema.entity(name).expect(name).def.actions.iter().filter(|a| !a.hidden) {
+                let c = a.contract.as_ref().unwrap_or_else(|| panic!("{name}.{} has no contract", a.name));
+                assert!(c.effect.is_some() && c.returns.is_some() && c.completion.is_some(), "{name}.{}: effect, returns, completion", a.name);
+                seen += 1;
+            }
+        }
+        assert!(seen >= 7);
     }
 
     #[test]

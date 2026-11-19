@@ -209,6 +209,8 @@ struct T {
     store: Arc<MemStore>,
     /// Sign's own handle on the vault, as its registration was given it: what reads its secret fields.
     sign: ferrum_kernel::vault::Vault,
+    /// The handles of the test's own apps (each package of `boot_with`'s, as an app of its name).
+    apps: HashMap<String, ferrum_kernel::vault::Vault>,
 }
 
 struct Tenant {
@@ -467,7 +469,7 @@ async fn scenario() {
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
+    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle"), apps: HashMap::new() };
 
     // ───────────── a workspace without Mail, in New York ─────────────
     let acme = t.tenant("acme", &["sign"], "America/New_York").await;
@@ -1123,7 +1125,7 @@ async fn scenario() {
         {"type": "generate", "template": "x_quote.letter"},
         {"type": "invoke", "capability": "sign.sign_request.create", "input": {"values":
             "{'title': doc.title, 'document': results[0].url, 'source_sha256': results[0].sha256, 'send_on_create': true, 'reference_entity': 'XQuote', \
-              'reference_id': doc.id, 'signers': [{'role': 'Customer', 'name': doc.customer, 'email': doc.customer_email}]}"}},
+              'reference_id': doc.id, 'verify_identity': 'None', 'signers': [{'role': 'Customer', 'name': doc.customer, 'email': doc.customer_email}]}"}},
         {"type": "set_fields", "values": {"status": "'Out for Signature'"}}]});
     let custom = |op: Value| -> ferrum_kernel::customize::NewCustomization { serde_json::from_value(json!({"entity": "XQuote", "op": op})).unwrap() };
     t.k.batch_customizations(&acme.admin, vec![custom(json!({"op": "define_entity", "entity": quote}))], false).await.map_err(|(_, e)| e).expect("the entity");
@@ -1223,26 +1225,7 @@ fn a_page_where_there_is_no_pdf_service_cannot_start_a_signature() {
 /// on a server with no PDF service. The page cannot be signed, so the press is refused whole: the record keeps its
 /// status, and no request, file or "sent" state is left behind.
 async fn no_pdf_service() {
-    let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
-    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 16, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
-    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
-    let mut packages = ferrum_domain::packages().expect("platform packages");
-    packages.extend(ferrum_app_sign::packages().expect("app packages"));
-    let catalog = Catalog::from_packages(packages).expect("catalog");
-    let mut hooks = HookRegistry::default();
-    ferrum_domain::register(&mut hooks);
-    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
-    let mut sign = None;
-    hooks.app("sign", &sign_packages, |h| {
-        ferrum_app_sign::register(h);
-        sign = Some(h.vault());
-    });
-    hooks.own("sign", &sign_packages);
-    let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
-    let store = Arc::new(MemStore::default());
-    k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
+    let t = boot(KernelSettings::default()).await;
     let acme = t.tenant("acme", &["sign"], "UTC").await;
     let quote = json!({"name": "XQuote", "label": "Quote", "kind": "master", "title_field": "title", "fields": [
         {"name": "title", "type": "data", "required": true}, {"name": "customer", "type": "data"}, {"name": "customer_email", "type": "email"},
@@ -1288,26 +1271,8 @@ fn a_signers_link_goes_through_the_link_host() {
 /// workspace's address changes, to the signing endpoints, which every host of the workspace serves. With an address of
 /// Sign's own, it is as before; with none at all, it is relative, as `sign_end_to_end` shows.
 async fn link_host() {
-    let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
-    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 8, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
-    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
-    let mut packages = ferrum_domain::packages().expect("platform packages");
-    packages.extend(ferrum_app_sign::packages().expect("app packages"));
-    let mut hooks = HookRegistry::default();
-    ferrum_domain::register(&mut hooks);
-    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
-    let mut sign = None;
-    hooks.app("sign", &sign_packages, |h| {
-        ferrum_app_sign::register(h);
-        sign = Some(h.vault());
-    });
-    hooks.own("sign", &sign_packages);
     let settings = KernelSettings { public_url: Some("https://erp.acme.test".into()), link_host: Some("go.acme.test".into()), ..Default::default() };
-    let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
-    let store = Arc::new(MemStore::default());
-    k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
+    let t = boot(settings).await;
     let acme = t.tenant("acme", &["sign"], "UTC").await;
     let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
     let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
@@ -1352,6 +1317,7 @@ async fn boot_with(settings: KernelSettings, extra: Vec<ferrum_meta::Package>) -
     ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("app packages"));
+    let names: Vec<String> = extra.iter().map(|p| p.name().to_string()).collect();
     packages.extend(extra);
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
@@ -1362,12 +1328,21 @@ async fn boot_with(settings: KernelSettings, extra: Vec<ferrum_meta::Package>) -
         sign = Some(h.vault());
     });
     hooks.own("sign", &sign_packages);
+    let mut apps = HashMap::new();
+    for name in names {
+        // An app's id has dashes where its package's name has underscores.
+        let id = name.replace('_', "-");
+        hooks.app(&id, std::slice::from_ref(&name), |h| {
+            apps.insert(name.clone(), h.vault());
+        });
+        hooks.own(&id, std::slice::from_ref(&name));
+    }
     let reports = ferrum_app_sign::reports().into_iter().map(|r| ("sign".to_string(), r)).collect();
     ferrum_domain::reports::set_sources(reports).expect("Sign's reports");
     let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    T { k, store, sign: sign.expect("Sign's handle") }
+    T { k, store, sign: sign.expect("Sign's handle"), apps }
 }
 
 /// K0-7 (S9): a role that reads Sign Requests but not some of their fields. Reports group, filter and aggregate only on
@@ -1501,6 +1476,106 @@ async fn seal_retries() {
         let sealed: i64 = t.scalar(&acme, "select count(*) from outbox where tenant_id = $1 and topic = 'sign.request_completed' and record_id = $2", id).await;
         assert_eq!(sealed, 1, "{who}: completed once on the outbox");
     }
+}
+
+/// S11-G1: two apps of the test's own. `quotes` declares that it uses Sign's create; `nosy` declares nothing of Sign's.
+const QUOTES: &str = "package: quotes\nversion: 0.1.0\ndepends: [sign]\nuses:\n  - {capability: sign.sign_request.create, version: '^0.3'}\n";
+const NOSY: &str = "package: nosy\nversion: 0.1.0\ndepends: [sign]\n";
+
+impl T {
+    /// App `app`'s call for `ctx`'s person, in a transaction of its own committed when it is done.
+    async fn call(&self, app: &str, ctx: &Ctx, inv: ferrum_kernel::capability::Invocation) -> Result<ferrum_kernel::capability::Receipt, Error> {
+        let mut tx = self.k.db.tenant_tx(ctx.tenant).await.unwrap();
+        let done = self.k.call_tx(&self.apps[app], ctx, &mut tx, &inv).await;
+        if done.is_ok() {
+            tx.commit().await.unwrap();
+        } else {
+            tx.rollback().await.unwrap();
+        }
+        done
+    }
+}
+
+#[test]
+fn sign_is_reached_through_its_operations() {
+    run(operations());
+}
+
+/// S11-G1a: another app asks for a signature through the gate, once per key, and is told by events; a request it makes
+/// asks its signers for a code sent to their own address; void says so on the outbox; and the gate refuses an app that
+/// declared no use and a person without the right.
+async fn operations() {
+    use ferrum_kernel::capability::Invocation;
+    let t = boot_with(KernelSettings::default(), vec![package(&[("package.yaml", QUOTES)]), package(&[("package.yaml", NOSY)])]).await;
+    let acme = t.tenant("acme", &["sign", "quotes", "nosy"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let ravi = t.user(&acme, "ravi@acme.test", "Ravi Kumar", &["Sign User"]).await;
+    let sys = t.sys(&acme);
+    let pdf = contract_pdf("Quote");
+    let values = |doc: &str| {
+        json!({"title": "Quote Q-1", "document": doc, "send_on_create": true,
+        "signers": [{"role": "Customer", "name": "Cora", "email": "cora@client.test"}],
+        "fields": [field("Customer", "Signature", "Sign", 1, 72, 600, 200, 50)]})
+    };
+    let doc = t.upload(&asha, "quote.pdf", &pdf).await;
+    let ask = Invocation::new("sign.sign_request.create", json!({"values": values(&doc)})).key("quote:Q-1:1");
+
+    // create_through_call_tx_sends_once_per_key
+    let first = t.call("quotes", &asha, ask.clone()).await.expect("the app's use");
+    let again = t.call("quotes", &asha, ask.clone()).await.expect("the same key");
+    assert!(!first.repeated && again.repeated, "a repeat is answered, not repeated");
+    let id = uid(first.result.as_object().unwrap());
+    assert_eq!(uid(again.result.as_object().unwrap()), id);
+    assert_eq!(t.list(&sys, "SignRequest", json!({})).await.len(), 1, "one request");
+    let r = t.get(&sys, "SignRequest", id).await;
+    assert_eq!((r["status"].clone(), r["sender_email"].clone()), (json!("Sent"), json!("asha@acme.test")), "sent at once, the person its sender");
+    assert_eq!(t.trail(&acme, id).await, vec!["Sent:Customer"], "sent once");
+
+    // requests_from_apps_ask_for_an_email_code_by_default
+    assert_eq!(r["verify_identity"], json!("Email Code"));
+    let key = t.key(&acme).await;
+    let cora = token_for(&key, acme.id, id, uid(&signer_row(&r, "Customer")), "cora@client.test");
+    let signs = json!({"consent": true, "signature": {"text": "Cora"}});
+    assert!(refused(t.sign(&acme, &cora, None, signs.clone()).await, "forbidden").contains("confirm the code"));
+    let mine =
+        t.k.insert(
+            &asha,
+            "SignRequest",
+            obj(json!({"title": "Mine", "document": t.upload(&asha, "m.pdf", &pdf).await,
+        "signers": [{"role": "C", "name": "Cy", "email": "cy@x.test"}], "fields": [field("C", "Signature", "S", 1, 72, 600, 200, 50)]})),
+        )
+        .await
+        .unwrap();
+    assert!(mine["verify_identity"].is_null(), "a request made on the screen asks for no code unless chosen");
+
+    // a_caller_without_the_use_is_refused
+    let other = Invocation::new("sign.sign_request.create", json!({"values": values(&t.upload(&asha, "q2.pdf", &pdf).await)})).key("nosy:1");
+    refused(t.call("nosy", &asha, other).await, "forbidden");
+    let void = Invocation::new("sign.sign_request.void", json!({"id": id, "params": {"reason": "x"}})).key("void:1");
+    refused(t.call("quotes", &asha, void).await, "forbidden");
+    assert_eq!(t.list(&sys, "SignRequest", json!({})).await.len(), 2, "nothing made by a refused call");
+
+    // a_sign_user_cannot_void_another_users_request
+    let theirs = Invocation::new("sign.sign_request.void", json!({"id": id, "params": {"reason": "not mine"}})).key("ravi:void");
+    assert!(t.k.invoke(&ravi, theirs).await.is_err(), "Ravi cannot void Asha's request");
+    assert_eq!(t.get(&sys, "SignRequest", id).await["status"], json!("Sent"));
+
+    // void_says_so_on_the_outbox, through the gate with a key
+    let voided =
+        t.k.invoke(&asha, Invocation::new("sign.sign_request.void", json!({"id": id, "params": {"reason": "Price changed"}})).key("asha:void")).await.unwrap();
+    assert_eq!(voided.result["status"], json!("Voided"));
+    let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+    let rows: Vec<Value> = sqlx::query_scalar("select payload from outbox where tenant_id = $1 and topic = 'sign.request_voided' and record_id = $2")
+        .bind(acme.id)
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(rows.len(), 1, "one event");
+    assert_eq!((rows[0]["reason"].clone(), rows[0]["status"].clone()), (json!("Price changed"), json!("Voided")));
+    let (status, _) = t.view(&acme, &cora, None).await.unwrap();
+    assert_eq!(status, 410, "every link refused");
 }
 
 /// What opens the test's vault: the database password of `url`, with Argon2id kept cheap for tests.

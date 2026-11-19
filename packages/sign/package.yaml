@@ -1,5 +1,5 @@
 package: sign
-version: 0.2.0
+version: 0.3.0
 label: Sign
 description: Electronic signatures - send PDFs for signing in order or in parallel, place fields per signer, sign by secure link, sealed PDFs with an audit certificate and a hash-chained audit trail.
 depends: [core]
@@ -44,9 +44,11 @@ messages:
         text: {text: "Your code to sign the document you opened: {{ values.code }}. It works once, for ten minutes."}
 
 # What a request about another record says when it ends, for processes to wait on (the request's own
-# update says it too, for automations): {request, status, reference_entity, reference_id, sealed_document}.
+# update says it too, for automations): {request, number, status, reference_entity, reference_id, sealed_document}, and a
+# voided request's reason.
 events:
   - {name: request_completed, label: Signature request completed, entity: SignRequest, description: "Everyone signed; the sealed PDF is on the request"}
   - {name: request_declined, label: Signature request declined, entity: SignRequest}
   - {name: request_expired, label: Signature request expired, entity: SignRequest}
   - {name: request_failed, label: Signature request could not be sent, entity: SignRequest}
+  - {name: request_voided, label: Signature request voided, entity: SignRequest, description: "The sender withdrew it; the payload carries the reason"}

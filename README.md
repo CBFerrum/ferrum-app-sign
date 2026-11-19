@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.4.2-4f46e5?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.0-4f46e5?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 [![CI](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml)
@@ -41,7 +41,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 
 | | |
 |---|---|
-| 📦 **Version** | 0.4.2 |
+| 📦 **Version** | 0.5.0 |
 | 🖥️ **Kind** | Its own interface at `/sign/` and a page for signers at `/sign/s/{workspace}/{token}`, with Ferrum's records screens for the rest |
 | ➕ **What it adds** | 7 entities in one package, 2 roles, 3 reports, a launcher app, a Create menu entry, one message template, 4 events other apps can follow, an assistant |
 | 🧱 **Depends on** | The platform's `core` package. Nothing else is required |
@@ -109,7 +109,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 - **A message and an end date.** The message is shown in the email and on the signing page. A request expires on its end date (in the workspace's time zone, correct across daylight saving) or after the workspace's default number of days.
 - **Linked to a record.** A request can be about any record you can read, such as a quotation, and shows on that record.
 - **Signature page.** When a request has no fields, a signature page is added at the end.
-- **Sign from any record.** A button on a record can generate a document and send it for signature in one step (`send_on_create`, `send_for_signature`). If the server has no PDF service, the request is refused whole in the button's own transaction, so the record keeps its status and nothing is left behind. A request that still cannot be sent at upkeep tells its sender and raises the event `sign.request_failed`.
+- **Sign from any record.** A button on a record can generate a document and send it for signature in one step (`send_on_create`); another app does it through the `sign.sign_request.create` operation it declares in `uses`, once per key. Such a request asks each signer for a code sent to their own e-mail unless the caller chose otherwise. If the server has no PDF service, the request is refused whole in the button's own transaction, so the record keeps its status and nothing is left behind. A request that still cannot be sent at upkeep tells its sender and raises the event `sign.request_failed`.
 - **Reminders per request.** Reminder cadence and the maximum number can be set on a request; Sign Settings holds the workspace's cadence and maximum.
 
 ### 🧩 Templates
@@ -135,7 +135,6 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 - **Link security.** Personal links carry a 128-bit HMAC tag under a key kept as a sealed secret, are compared in constant time, expire, and are single-use. A forged, tampered or retired link gets the same answer as an unknown one. Responses are marked not to be cached, indexed or leaked through referrers.
 - **Access code.** An optional code the sender tells the signer separately. It is stored only as an Argon2id hash and never emailed. Five wrong tries lock the link for 15 minutes.
 - **One-time codes.** A request, or a single signer, can require a code by email or by text message. The code works once, for ten minutes, a sixth try is refused, and signing is refused until it is confirmed. The certificate says how each signer was checked. Text codes need the platform's text-message channel.
-- **Identity providers.** An interface (`identity::IdentityProvider`) lets a developer add a stronger check, such as an ID document check. No provider ships yet.
 
 ### 🔎 Following a request
 
@@ -162,7 +161,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 - **With the Mail app,** invitations (when a signer's turn comes), reminders, withdrawal notices and the sealed copy are Communications on the request's timeline, sent and retried by Mail.
 - **Without Mail,** invitations, reminders and withdrawals go through the server's mailer, and the completion email carries the signed PDF when the mailer can attach files. When the workspace sends no email at all, actions return the links and the sender gets in-app notifications with them.
 - **Automatic reminders and expiry.** Every minute, requests past their end become Expired (the sender is told), signers whose turn it is are reminded on the cadence up to the maximum, each once, and stuck sealings are retried. Expiry and sealing count a "Not Needed" group member and a copy-only recipient as done.
-- **Events for other apps and automations.** `request_completed`, `request_declined`, `request_expired` and `request_failed`.
+- **Events for other apps and automations.** `request_completed`, `request_declined`, `request_expired`, `request_voided` (with the reason) and `request_failed`.
 
 ### 📊 Reports
 
@@ -281,7 +280,7 @@ Sign is ordinary Ferrum metadata and Rust, so requests get lists, forms, search,
 | Any record | `reference_entity` and `reference_id` link a request to a record; a button can send from it | Read access to the record |
 | Platform text-message channel | One-time codes by text message | A text channel set up in the platform |
 | PDF service | Pages generated by other apps are made into PDFs before they can be signed | `FERRUM_PDF_URL` |
-| Webhooks and automations | `request_completed`, `request_declined`, `request_expired`, `request_failed` | Platform webhooks |
+| Webhooks and automations | `request_completed`, `request_declined`, `request_expired`, `request_voided`, `request_failed` | Platform webhooks |
 | Public verification | Anyone can check a PDF against the stored original | Nothing |
 
 **What the tests exercise.** The tests send emails through Mail's own queue (a Communication), not to a real mail server. One-time codes by text message are read from the platform's test channel, not a real text-message provider. No PDF service runs in them: a generated page is only checked to be refused, naming the missing service. PDF parsing, stamping and sealing run for real.
@@ -356,6 +355,7 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 
 ### ✅ Recently shipped
 
+- [x] **0.5.0** Operations with contracts for other apps and agents, `request_voided`, a code by default for requests from other records.
 - [x] **0.4.2** Reports group and count only by fields the caller may read.
 - [x] **0.4.1** A failed seal is retried for requests with copies or groups; a request is never Completed without its seal; failures reach a person.
 - [x] **0.4.0** Upkeep is one workspace's: needs Ferrum 0.4.0.

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+Needs the same platform as 0.4.2. Package `sign` 0.3.0: callers declare `uses` at `^0.3` (Contracts' `^0.2` uses
+move with it). No database change. Interface unchanged.
+
+- **Other apps reach Sign through its operations.** Every action a person can press says what it does, what it returns
+  and what "done" means (`contract:`), and declares the parameters it reads. Another app asks for a signature with
+  `sign.sign_request.create` (`send_on_create`) through its `uses` and `Kernel::call_tx`: once per key, as the person it
+  acts for. The Rust entry point `send_for_signature` and the unused `identity` interface are gone.
+- **A void is told.** Voiding raises `sign.request_voided` with the reason, beside completed, declined, expired and
+  failed.
+- **Requests from other records ask for a code.** A request sent as it is made (by an app or a configured step) asks
+  each signer to confirm a code sent to their own e-mail unless the caller chose otherwise; a request made on the screen
+  asks for none unless chosen. The request's own default is now empty rather than None.
+- **Verify Integrity is read-only.**
+
 ## 0.4.2
 
 Needs Ferrum with K0-1 (`reports::readable_choice`). No database or interface change.

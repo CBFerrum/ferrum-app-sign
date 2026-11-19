@@ -10,7 +10,14 @@
     - {name: max_reminders, type: int, default: 3, min: 0, max: 20, description: "Automatic reminders per signer at most"}
     - {name: signing_key, type: secret, read_only: true, hidden: true, description: "HMAC key that signs signer links and salts IP hashes; created automatically. Rotating it retires every outstanding link"}
   actions:
-    - {name: rotate_signing_key, label: Rotate Signing Key, permission: write, confirm: "Every signing link sent so far stops working; use Resend Links on open requests afterwards. Continue?"}
+    - name: rotate_signing_key
+      label: Rotate Signing Key
+      permission: write
+      confirm: "Every signing link sent so far stops working; use Resend Links on open requests afterwards. Continue?"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {rotated: {type: boolean}}}
+        completion: "A new signing key is stored; every link sent before it stops working"
 
 - name: SignTemplateRole
   label: Sign Template Role
@@ -58,7 +65,22 @@
     - {name: fields, type: table, of: SignField}
     - {name: disabled, type: check, in_list: true, in_filter: true}
   actions:
-    - {name: create_request, label: Create Request, permission: read, condition: "!doc.disabled"}
+    - name: create_request
+      label: Create Request
+      permission: read
+      condition: "!doc.disabled"
+      params:
+        - {name: title, type: data, label: Title, description: "Default: the template's title, else its name"}
+        - {name: message, type: text, label: Message}
+        - {name: signing_mode, type: select, label: Signing Order, options: [Sequential, Parallel]}
+        - {name: expires_on, type: date, label: Last Day to Sign}
+        - {name: reference_entity, type: data, label: About Entity, description: "The record the request is about, e.g. Quotation"}
+        - {name: reference_id, type: data, label: About Record}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {entity: {type: string, const: SignRequest}, id: {type: string, format: uuid, x-ferrum-link: SignRequest},
+                  number: {type: [string, "null"]}}}
+        completion: "A draft Sign Request copied from the template exists, the template's PDF, roles and fields its own; the presser may read what it is about"
   form:
     - {label: Template, fields: [template_name, title, signing_mode, expiry_days, disabled, message]}
     - {label: Document, fields: [document, document_name, page_count, document_sha256]}
@@ -120,8 +142,8 @@
     - {name: page_count, type: int, read_only: true, no_copy: true}
     - {name: page_sizes, type: json, read_only: true, hidden: true, no_copy: true, description: "[[width, height], ...] of each page as displayed, in points"}
     - {name: signing_mode, type: select, options: [Sequential, Parallel], default: Sequential, required: true, in_filter: true}
-    - {name: verify_identity, type: select, options: [None, Email Code, Text Code], default: None,
-       description: "Every signer confirms a one-time code sent to their e-mail address or phone before signing (a signer's own setting wins)"}
+    - {name: verify_identity, type: select, options: [None, Email Code, Text Code],
+       description: "Every signer confirms a one-time code sent to their e-mail address or phone before signing (a signer's own setting wins). Empty: None, except for a request sent as it is made (from another app or a configured step), which asks for an Email Code"}
     - {name: allow_reassign, type: check, description: "A signer may hand their signature over to someone else, saying why"}
     - {name: reminder_every_days, type: int, min: 0, max: 60, description: "Reminders for this request (empty: Sign Settings')"}
     - {name: max_reminders, type: int, min: 0, max: 20, description: "Reminders per signer for this request at most (empty: Sign Settings')"}
@@ -144,14 +166,34 @@
     - {name: fields, type: table, of: SignField}
   indexes: [[status, expires_at], [reference_entity, reference_id], [sealed_sha256]]
   actions:
-    - {name: send, label: Send for Signature, permission: write, condition: "doc.status == 'Draft'"}
-    - {name: remind, label: Send Reminder, permission: write, condition: "doc.status == 'Sent' || doc.status == 'In Progress'"}
+    - name: send
+      label: Send for Signature
+      permission: write
+      condition: "doc.status == 'Draft'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {status: {type: string, const: Sent}, expires_at: {type: string},
+                  signers: {type: array, items: {type: object, properties: {role: {type: string}, name: {type: string}, email: {type: string},
+                  emailed: {type: boolean}, url: {type: string}}}}}}
+        completion: "The request is Sent; each signer whose turn it is has their link mailed, or returned here when no mail can go out"
+    - name: remind
+      label: Send Reminder
+      permission: write
+      condition: "doc.status == 'Sent' || doc.status == 'In Progress'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {reminded: {type: array, items: {type: object}}}}
+        completion: "A reminder is queued for every signer whose turn it is and who has not signed"
     - name: resend
       label: Resend Links
       permission: write
       condition: "doc.status == 'Sent' || doc.status == 'In Progress'"
       params:
         - {name: signer, type: data, label: Signer, description: "One signer's email or role; everyone whose turn it is when empty"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {resent: {type: array, items: {type: object}}}}
+        completion: "The signing link is queued again for that signer, or for everyone whose turn it is"
     - name: void
       label: Void
       permission: write
@@ -159,7 +201,20 @@
       confirm: "Signers will no longer be able to sign. Continue?"
       params:
         - {name: reason, type: text, label: Reason, description: "Kept on the request and in its trail"}
-    - {name: verify, label: Verify Integrity, permission: read, condition: "doc.status != 'Draft'"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {status: {type: string, const: Voided}}}
+        completion: "Every signing link is refused, sign.request_voided is on the outbox with the reason, and signers who had the link are told"
+    - name: verify
+      label: Verify Integrity
+      permission: read
+      read_only: true
+      condition: "doc.status != 'Draft'"
+      contract:
+        effect: query
+        returns: {type: object, properties: {valid: {type: boolean}, status: {type: string}, original: {type: object}, sealed: {type: [object, "null"]},
+                  audit_trail: {type: object}}}
+        completion: "The stored files and the audit trail are recomputed and compared; nothing changes"
   form:
     - {label: Request, fields: [title, status, signing_mode, expires_on, message]}
     - {label: Signers' Identity and Reminders, collapsible: true, fields: [verify_identity, allow_reassign, reminder_every_days, max_reminders]}

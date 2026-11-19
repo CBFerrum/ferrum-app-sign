@@ -94,6 +94,11 @@ impl DocHook for RequestHook {
         if !doc.contains_key("created_at") && s(doc, "sender_email").is_none() && !hc.ctx.user.is_nil() {
             doc.insert("sender_email".into(), json!(hc.ctx.email.to_lowercase()));
         }
+        // A request sent as it is made comes from another record (an app's `call_tx`, a configured step): its signers
+        // confirm a code sent to their own address unless the caller chose otherwise. The screens never set it.
+        if !doc.contains_key("created_at") && crate::b(doc, "send_on_create") && s(doc, "verify_identity").is_none() {
+            doc.insert("verify_identity".into(), json!("Email Code"));
+        }
 
         // Access codes are kept only as Argon2id hashes.
         if let Some(Value::Array(signers)) = doc.get_mut("signers") {
@@ -401,6 +406,7 @@ async fn void(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Value> 
         },
     )
     .await?;
+    crate::envelope::ended(hc.tx, ctx, &voided, "Voided").await?;
     if crate::can_email(k, ctx) {
         let out = Outbox::load(k, ctx, hc.tx).await?;
         for sg in rows(&voided, "signers").iter().filter(|r| matches!(s(r, "status"), Some("Sent" | "Viewed" | "Signed"))) {
