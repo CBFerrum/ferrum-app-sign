@@ -102,6 +102,8 @@
     - {name: verify_identity, type: select, options: [As Request, None, Email Code, Text Code], default: As Request,
        description: "Before signing, the signer confirms a one-time code sent to their e-mail address or phone (As Request: the request's setting)"}
     - {name: access_code, type: data, max_length: 64, description: "Optional code the signer must also enter (tell them separately); kept only as a hash"}
+    - {name: delivery, type: select, options: [Email, Link], default: Email, in_list: true,
+       description: "Email: their link is mailed. Link: nothing is mailed; the app that asked opens the signing page for them with a link that lasts minutes (Signing Link)"}
     - {name: access_code_hash, type: data, read_only: true, hidden: true, no_copy: true}
     - {name: status, type: select, options: [Waiting, Sent, Viewed, Signed, Declined, Not Needed], default: Waiting, read_only: true, no_copy: true, in_list: true}
     - {name: identity_verified_at, type: datetime, read_only: true, no_copy: true}
@@ -123,6 +125,7 @@
     - {name: failed_attempts, type: int, read_only: true, hidden: true, no_copy: true}
     - {name: locked_until, type: datetime, read_only: true, hidden: true, no_copy: true}
     - {name: submission_hash, type: data, read_only: true, hidden: true, no_copy: true}
+    - {name: devices, type: json, read_only: true, hidden: true, no_copy: true, description: "Keyed hashes of the devices that opened the link (the last 20): a new one is in the trail"}
 
 - name: SignRequest
   label: Sign Request
@@ -205,6 +208,20 @@
         effect: transactional_action
         returns: {type: object, properties: {status: {type: string, const: Voided}}}
         completion: "Every signing link is refused, sign.request_voided is on the outbox with the reason, and signers who had the link are told"
+    - name: signing_link
+      label: Signing Link
+      permission: write
+      hidden: true
+      condition: "doc.status == 'Sent' || doc.status == 'In Progress'"
+      params:
+        - {name: signer, type: data, label: Signer, required: true, description: "The signer's row id, role or email; their delivery must be Link and it must be their turn"}
+        - {name: minutes, type: int, label: Minutes, description: "How long the link opens their page: 1 to 60 (default 15), never past the request's expiry"}
+        - {name: embed, type: check, label: In a Frame, description: "The page is shown framed on a site the workspace allows (Sign Settings, Allow Embedding)"}
+      contract:
+        effect: transactional_action
+        retention_days: 1
+        returns: {type: object, properties: {url: {type: string}, expires_at: {type: string}}}
+        completion: "The URL opens that signer's signing page until expires_at or until they act; Link Issued is in the trail"
     - name: verify
       label: Verify Integrity
       permission: read
@@ -236,7 +253,7 @@
     - {name: request, type: link, to: SignRequest, required: true, on_delete: cascade, in_list: true, in_filter: true}
     - {name: seq, type: int, label: No., required: true, in_list: true}
     - {name: event, type: select, required: true, in_list: true, in_filter: true,
-       options: [Sent, Viewed, Signed, Declined, Reminded, Resent, Corrected, Access Denied, Voided, Expired, Completed, Code Sent, Identity Verified, Reassigned, Not Needed]}
+       options: [Sent, Viewed, Signed, Declined, Reminded, Resent, Corrected, Access Denied, Voided, Expired, Completed, Code Sent, Identity Verified, Reassigned, Not Needed, Link Issued]}
     - {name: occurred_at, type: datetime, label: Time, required: true, in_list: true}
     - {name: role, type: data, max_length: 60}
     - {name: signer_name, type: data, max_length: 140}

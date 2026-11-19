@@ -53,6 +53,33 @@ pub fn link_valid(key: &[u8], tenant: Uuid, request: Uuid, signer: Uuid, email: 
     tag.len() == 16 && link_mac(key, tenant, request, signer, email).verify_truncated_left(tag).is_ok()
 }
 
+const SESSION: &[u8] = b"ferrum-sign/session/v1";
+
+fn session_mac(key: &[u8], tenant: Uuid, signer: Uuid, email: &str, expires: i64) -> Hmac<Sha256> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    for part in [SESSION, tenant.as_bytes(), signer.as_bytes(), email.trim().to_lowercase().as_bytes(), &expires.to_be_bytes()] {
+        mac.update(&(part.len() as u32).to_be_bytes());
+        mac.update(part);
+    }
+    mac
+}
+
+/// A link that opens a signer's page until `expires` (seconds since 1970), for a signer whose link is not mailed: the
+/// moment and a 128-bit tag over the tenant, the signer, their email and the moment. Nothing is stored; rotating the key
+/// or correcting the email retires it, as it does links.
+pub fn session_token(key: &[u8], tenant: Uuid, signer: Uuid, email: &str, expires: i64) -> String {
+    let mut raw = expires.to_be_bytes().to_vec();
+    raw.extend_from_slice(&session_mac(key, tenant, signer, email, expires).finalize().into_bytes()[..16]);
+    URL_SAFE_NO_PAD.encode(raw)
+}
+
+/// Whether `token` is this signer's session and still open at `now` (seconds since 1970); constant time.
+pub fn session_valid(key: &[u8], tenant: Uuid, signer: Uuid, email: &str, token: &str, now: i64) -> bool {
+    let Some(raw) = URL_SAFE_NO_PAD.decode(token.trim()).ok().filter(|r| r.len() == 24) else { return false };
+    let expires = i64::from_be_bytes(raw[..8].try_into().expect("eight bytes"));
+    expires > now && session_mac(key, tenant, signer, email, expires).verify_truncated_left(&raw[8..]).is_ok()
+}
+
 /// The audit trail's salted hash of a client address (128 bits, hex): equal addresses compare
 /// equal within the tenant, but the address itself is not kept.
 pub fn ip_hash(key: &[u8], ip: &str) -> String {
@@ -151,6 +178,23 @@ mod tests {
         let (_, bad) = parse(std::str::from_utf8(&flipped).unwrap()).unwrap();
         assert!(!link_valid(&key, t, r, s, "jane@client.test", &bad), "a tampered tag");
         assert!(parse("short").is_none() && parse(&format!("{}!", &token[..42])).is_none() && parse(&format!("{token}A")).is_none());
+    }
+
+    #[test]
+    fn a_session_binds_signer_email_and_time() {
+        let (key, t, s) = ([7u8; 32], Uuid::now_v7(), Uuid::now_v7());
+        let token = session_token(&key, t, s, "Cora@Client.test", 1_000);
+        assert!(session_valid(&key, t, s, "cora@client.test", &token, 999), "emails compare case-insensitively");
+        assert!(!session_valid(&key, t, s, "cora@client.test", &token, 1_000), "not at its moment or after");
+        assert!(!session_valid(&[8u8; 32], t, s, "cora@client.test", &token, 0), "another key");
+        assert!(!session_valid(&key, Uuid::now_v7(), s, "cora@client.test", &token, 0), "another tenant");
+        assert!(!session_valid(&key, t, Uuid::now_v7(), "cora@client.test", &token, 0), "another signer");
+        assert!(!session_valid(&key, t, s, "eve@client.test", &token, 0), "a corrected email");
+        // A later moment with the old tag: the moment is under the tag.
+        let mut raw = URL_SAFE_NO_PAD.decode(&token).unwrap();
+        raw[..8].copy_from_slice(&5_000i64.to_be_bytes());
+        assert!(!session_valid(&key, t, s, "cora@client.test", &URL_SAFE_NO_PAD.encode(&raw), 2_000), "an extended moment");
+        assert!(!session_valid(&key, t, s, "cora@client.test", "short", 0) && !session_valid(&key, t, s, "cora@client.test", "", 0));
     }
 
     #[test]

@@ -102,6 +102,7 @@ async fn remind(k: &Kernel, ctx: &Ctx) -> Result<usize> {
     let due: Vec<(Uuid, Uuid)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select s.parent_id, s.id from {signers} s join e_sign_request r on r.tenant_id = s.tenant_id and r.id = s.parent_id \
          where s.tenant_id = $1 and r.status in ('Sent', 'In Progress') and r.expires_at > now() and s.status in ('Sent', 'Viewed') \
+         and coalesce(s.delivery, 'Email') = 'Email' \
          and coalesce(s.reminders_sent, 0) < coalesce(r.max_reminders, $2) and coalesce(r.reminder_every_days, $3) > 0 \
          and greatest(s.sent_at, s.last_reminded_at) <= now() - make_interval(days => coalesce(r.reminder_every_days, $3)::int) \
          order by greatest(s.sent_at, s.last_reminded_at) limit {BATCH}"

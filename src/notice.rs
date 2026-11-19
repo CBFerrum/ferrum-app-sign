@@ -38,6 +38,25 @@ impl Outbox {
         Ok(format!("{}/api/site/{}/sign/s/{token}", self.settings.public_url.as_deref().unwrap_or_default(), self.slug))
     }
 
+    /// A signer's page for `minutes` from now (never past the request's expiry), for a signer whose link is not mailed:
+    /// the interface's page with the session (`?e=`), framed when `embed`. With its moment.
+    pub fn session_link(&self, request: &Doc, signer: &Doc, minutes: i64, embed: bool) -> Result<(String, chrono::DateTime<chrono::Utc>)> {
+        let mut until = crate::now() + chrono::Duration::minutes(minutes);
+        if let Some(end) = time(request, "expires_at") {
+            until = until.min(end);
+        }
+        let email = s(signer, "email").unwrap_or_default();
+        let token = token::link_token(&self.key, self.tenant, doc_id(request)?, doc_id(signer)?, email);
+        let session = token::session_token(&self.key, self.tenant, doc_id(signer)?, email, until.timestamp());
+        let url = format!(
+            "{}/sign/s/{}/{token}?e={session}{}",
+            self.settings.public_url.as_deref().unwrap_or_default(),
+            self.slug,
+            if embed { "&embed=1" } else { "" }
+        );
+        Ok((url, until))
+    }
+
     /// Emailed links must be absolute.
     pub fn require_url(&self) -> Result<()> {
         if self.mail && self.settings.public_url.is_none() {
@@ -49,7 +68,7 @@ impl Outbox {
     /// Emails a signer their link — an invitation or a reminder — when the workspace has Mail;
     /// returns whether it was emailed (otherwise the caller hands out the link).
     pub async fn invite(&self, k: &Kernel, ctx: &Ctx, tx: &mut Tx, request: &Doc, signer: &Doc, reminder: bool) -> Result<bool> {
-        if !self.mail {
+        if !self.mail || linked(signer) {
             return Ok(false);
         }
         self.require_url()?;
@@ -220,13 +239,32 @@ pub async fn links_to(tx: &mut Tx, ctx: &Ctx, request: &Doc, links: &[Value]) ->
     Ok(())
 }
 
-/// `{role, name, email, emailed, url?}`: the URL only when it was not emailed.
+/// `{role, name, email, emailed, url?}`: the URL only when it was not emailed, and never for a signer whose page the
+/// requesting app opens (their link alone opens nothing: `signing_link` gives a session).
 pub fn link_row(out: &Outbox, request: &Doc, signer: &Doc, emailed: bool) -> Result<Value> {
     let mut row = json!({"role": s(signer, "role"), "name": s(signer, "name"), "email": s(signer, "email"), "emailed": emailed});
-    if !emailed {
+    if linked(signer) {
+        row["delivery"] = json!("Link");
+    } else if !emailed {
         row["url"] = json!(out.link(request, signer)?);
     }
     Ok(row)
+}
+
+/// A signer whose link is not mailed: the app that asked opens their page (`signing_link`).
+pub fn linked(signer: &Doc) -> bool {
+    s(signer, "delivery").is_some_and(|d| d != "Email")
+}
+
+/// What the trail says of a link given out: mailed, handed to the sender, or left to the requesting app.
+pub fn given(signer: &Doc, emailed: bool, again: bool) -> &'static str {
+    match (linked(signer), emailed, again) {
+        (true, _, _) => "Signing link issued by the requesting app when it opens the page",
+        (false, true, false) => "Emailed the signing link",
+        (false, true, true) => "Emailed the signing link again",
+        (false, false, false) => "Signing link given to the sender",
+        (false, false, true) => "Signing link given to the sender again",
+    }
 }
 
 pub fn esc(v: &str) -> String {

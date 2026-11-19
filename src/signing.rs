@@ -24,11 +24,13 @@ const MAX_TEXT: usize = 500;
 
 pub const CONSENT: &str = "I agree to sign this document electronically and that my electronic signature is as valid as my handwritten one.";
 
-/// Who is calling: the address (hashed before it is kept), the browser and the access code.
+/// Who is calling: the address (hashed before it is kept), the browser, the access code, and the session a signer
+/// whose link is not mailed opens their page with (`token::session_token`).
 pub struct Client {
     pub ip: String,
     pub user_agent: Option<String>,
     pub access_code: Option<String>,
+    pub session: Option<String>,
 }
 
 pub enum Reply {
@@ -81,20 +83,25 @@ impl Opened {
     }
 }
 
-async fn open(k: &Kernel, sys: &Ctx, tx: &mut Tx, token_str: &str) -> Result<Opened> {
+async fn open(k: &Kernel, sys: &Ctx, tx: &mut Tx, token_str: &str, c: &Client) -> Result<Opened> {
     let (signer_id, tag) = token::parse(token_str).ok_or_else(not_found)?;
     let table = child_table(sys, "SignRequest", "signers")?;
-    let row: Option<(Uuid, Option<String>)> =
-        sqlx::query_as(sqlx::AssertSqlSafe(format!("select parent_id, email from {table} where tenant_id = $1 and id = $2")))
+    let row: Option<(Uuid, Option<String>, Option<String>)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("select parent_id, email, delivery from {table} where tenant_id = $1 and id = $2")))
             .bind(sys.tenant)
             .bind(signer_id)
             .fetch_optional(&mut **tx)
             .await?;
-    let (parent, email) = row.ok_or_else(not_found)?;
+    let (parent, email, delivery) = row.ok_or_else(not_found)?;
     let key = token::signing_key(k, tx, sys.tenant).await?;
     // The tag is checked before anything is locked: forged tokens cost a lookup, nothing more.
     let email = email.unwrap_or_default();
     if !token::link_valid(&key, sys.tenant, parent, signer_id, &email, &tag) {
+        return Err(not_found());
+    }
+    // A signer whose link is not mailed opens their page only with a session the requesting app was given minutes ago.
+    let linked = delivery.as_deref().is_some_and(|d| d != "Email");
+    if linked && !c.session.as_deref().is_some_and(|t| token::session_valid(&key, sys.tenant, signer_id, &email, t, now().timestamp())) {
         return Err(not_found());
     }
     let request = crate::lock_request(k, sys, tx, parent).await.map_err(|e| match e {
@@ -164,14 +171,37 @@ async fn access(k: &Kernel, sys: &Ctx, tx: &mut Tx, o: &Opened, c: &Client) -> R
     }))
 }
 
-/// First access through a link: the signer has viewed the request.
+/// The most devices kept per signer.
+const DEVICES: usize = 20;
+
+/// First access through a link: the signer has viewed the request. A device not seen before (a keyed hash of its
+/// address and browser) is kept, and after the first it is in the trail: a forwarded link shows.
 async fn mark_viewed(k: &Kernel, sys: &Ctx, tx: &mut Tx, o: &Opened, c: &Client) -> Result<()> {
-    if o.signer.get("viewed_at").is_some_and(|v| !v.is_null()) {
+    let device = token::ip_hash(&o.key, &format!("{}|{}", c.ip, c.user_agent.as_deref().unwrap_or_default()));
+    let mut devices: Vec<String> =
+        o.signer.get("devices").and_then(Value::as_array).map(|a| a.iter().filter_map(|d| d.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let first = o.signer.get("viewed_at").is_none_or(Value::is_null);
+    let new_device = !devices.contains(&device);
+    if !first && !new_device {
         return Ok(());
     }
-    set_signer(k, sys, tx, doc_id(&o.signer)?, json!({"status": "Viewed", "viewed_at": ts(now())})).await?;
-    let actor = s(&o.signer, "email").unwrap_or_default().to_string();
-    event::record(k, sys, tx, &o.request, Entry::new("Viewed", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref())).await?;
+    let another = new_device && !devices.is_empty();
+    if new_device {
+        devices.push(device);
+        let extra = devices.len().saturating_sub(DEVICES);
+        devices.drain(..extra);
+    }
+    let mut patch = json!({"devices": devices});
+    if first {
+        patch["status"] = json!("Viewed");
+        patch["viewed_at"] = json!(ts(now()));
+    }
+    set_signer(k, sys, tx, doc_id(&o.signer)?, patch).await?;
+    if first || another {
+        let actor = s(&o.signer, "email").unwrap_or_default().to_string();
+        let entry = Entry::new("Viewed", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref());
+        event::record(k, sys, tx, &o.request, if first { entry } else { entry.details("another device") }).await?;
+    }
     Ok(())
 }
 
@@ -200,7 +230,7 @@ where
     let sys = system(k, tenant).await?;
     with_retry(|| async {
         let mut tx = k.db.tenant_tx(tenant).await?;
-        let o = open(k, &sys, &mut tx, token_str).await?;
+        let o = open(k, &sys, &mut tx, token_str, c).await?;
         if let Some(message) = gate(&o)? {
             tx.rollback().await?;
             return Ok(Gate::Gone(message, o.state()));
@@ -414,7 +444,7 @@ pub async fn sign(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, raw: &[
     let sys = system(k, tenant).await?;
     let (reply, seal_id) = with_retry(|| async {
         let mut tx = k.db.tenant_tx(tenant).await?;
-        let o = open(k, &sys, &mut tx, token_str).await?;
+        let o = open(k, &sys, &mut tx, token_str, c).await?;
         // A repeated submission (a retry after a lost answer) gets the first one's answer.
         if s(&o.signer, "status") == Some("Signed") {
             tx.rollback().await?;
@@ -509,7 +539,7 @@ async fn apply_signature(k: &Kernel, sys: &Ctx, tx: &mut Tx, o: &Opened, plan: S
             after = k.get_tx(sys, tx, "SignRequest", rid, false).await?;
             for sg in request::turn(&after).iter().filter(|r| next.iter().any(|n| n.get("id") == r.get("id"))) {
                 let emailed = out.invite(k, sys, tx, &after, sg, false).await?;
-                let detail = if emailed { "Emailed the signing link" } else { "Signing link given to the sender" };
+                let detail = notice::given(sg, emailed, false);
                 event::record(k, sys, tx, &after, Entry::new("Sent", "system").signer(sg).details(detail)).await?;
                 links.push(notice::link_row(&out, &after, sg, emailed)?);
             }
@@ -541,7 +571,7 @@ pub async fn decline(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, raw:
     let sys = system(k, tenant).await?;
     with_retry(|| async {
         let mut tx = k.db.tenant_tx(tenant).await?;
-        let o = open(k, &sys, &mut tx, token_str).await?;
+        let o = open(k, &sys, &mut tx, token_str, c).await?;
         if s(&o.signer, "status") == Some("Declined") {
             tx.rollback().await?;
             return Ok(Reply::Ok(json!({"status": "Declined", "request_status": s(&o.request, "status"), "replayed": true})));

@@ -47,6 +47,18 @@ const view: SigningView = {
 };
 
 describe("the signer's page, drawn once", () => {
+  it("fetches the document with its headers when the page came with a session", () => {
+    const loc = window.location as { search?: string };
+    loc.search = "?e=SESSION";
+    try {
+      const html = renderToStaticMarkup(<Ready view={view} base="/api/site/acme/sign/signing/T" hasCode={false} call={() => Promise.reject(new Error("no"))} onChange={() => {}} onSigned={() => {}} onDeclined={() => {}} reopen={() => {}} />);
+      expect(html).not.toContain('href="/api/site/acme/sign/signing/T/document"');
+      expect(html).toContain("Download the PDF");
+    } finally {
+      loc.search = "";
+    }
+  });
+
   it("shows the pages with something to do, the steps and the next button", () => {
     const html = renderToStaticMarkup(<Ready view={view} base="/api/site/acme/sign/signing/T" hasCode={false} call={() => Promise.reject(new Error("no"))} onChange={() => {}} onSigned={() => {}} onDeclined={() => {}} reopen={() => {}} />);
     expect(html).toContain("Master Services Agreement");

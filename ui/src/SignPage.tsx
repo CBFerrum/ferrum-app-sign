@@ -62,6 +62,8 @@ type Phase = Reached | { kind: "loading" } | { kind: "signed"; requestStatus: st
 
 export function SigningPage() {
   const link = useMemo(() => locate(window.location.pathname), []);
+  // A signer whose link is not mailed comes with a session the requesting app was given (`?e=`), minutes long.
+  const session = useMemo(() => new URLSearchParams(window.location.search).get("e") ?? "", []);
   const code = useRef("");
   const [phase, setPhase] = useState<Phase>(link ? { kind: "loading" } : { kind: "invalid" });
   const base = link ? `/api/site/${enc(link.tenant)}/sign/signing/${enc(link.token)}` : "";
@@ -74,9 +76,13 @@ export function SigningPage() {
         ...init,
         cache: "no-store",
         credentials: "omit",
-        headers: { ...(init.headers as Record<string, string> | undefined), ...(code.current ? { "X-Access-Code": code.current } : {}) },
+        headers: {
+          ...(init.headers as Record<string, string> | undefined),
+          ...(code.current ? { "X-Access-Code": code.current } : {}),
+          ...(session ? { "X-Sign-Session": session } : {}),
+        },
       }),
-    [base],
+    [base, session],
   );
 
   const open = useCallback(async () => {
@@ -308,6 +314,8 @@ export function Ready({
   reopen: () => void;
 }) {
   const { request, signer, fields } = view;
+  // The document is fetched with the page's headers (a plain link cannot carry the code or the session).
+  const fetched = hasCode || new URLSearchParams(window.location.search).has("e");
   const name = signer.name ?? "";
   const tasks = useMemo(() => tasksOf(fields), [fields]);
   const pages = useMemo(() => pagesWithFields(fields), [fields]);
@@ -476,8 +484,8 @@ export function Ready({
               {first ? tr("Hello {first}. ", { first }) : ""}
               <strong>{pages.length ? tr("Your boxes are on {pages}.", { pages: pagesText(pages) }) : tr("There is nothing to fill in on the pages.")}</strong> {tr("Read the whole document, then fill them in.")}
             </p>
-            <DocumentLink base={base} hasCode={hasCode} call={call} name={request.document_name} pages={request.pages.length} />
-            {!hasCode && !pdf && <Preview src={`${base}/document`} />}
+            <DocumentLink base={base} hasCode={fetched} call={call} name={request.document_name} pages={request.pages.length} />
+            {!fetched && !pdf && <Preview src={`${base}/document`} />}
           </div>
           {(pdf ? request.pages.map((p) => p.page) : pages).map((n) => {
             const size = request.pages.find((p) => p.page === n) ?? { page: n, width: 612, height: 792 };

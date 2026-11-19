@@ -331,10 +331,16 @@ impl T {
 
     /// One call to the public site, as the server hands it to the package.
     async fn site(&self, t: &Tenant, method: &str, path: &str, code: Option<&str>, body: Vec<u8>) -> Result<SiteResponse, Error> {
+        let code: Vec<(&str, &str)> = code.map(|c| ("x-access-code", c)).into_iter().collect();
+        self.site_with(t, method, path, &code, body).await
+    }
+
+    /// [`site`](Self::site) with the request's headers (`user-agent` by default).
+    async fn site_with(&self, t: &Tenant, method: &str, path: &str, extra: &[(&str, &str)], body: Vec<u8>) -> Result<SiteResponse, Error> {
         let mut headers = Map::new();
         headers.insert("user-agent".into(), json!("Mozilla/5.0 (it) Firefox/140.0"));
-        if let Some(c) = code {
-            headers.insert("x-access-code".into(), json!(c));
+        for (k, v) in extra {
+            headers.insert(k.to_string(), json!(v));
         }
         let req = SiteRequest {
             tenant: t.id,
@@ -1576,6 +1582,124 @@ async fn operations() {
     assert_eq!((rows[0]["reason"].clone(), rows[0]["status"].clone()), (json!("Price changed"), json!("Voided")));
     let (status, _) = t.view(&acme, &cora, None).await.unwrap();
     assert_eq!(status, 410, "every link refused");
+}
+
+#[test]
+fn a_link_signer_opens_the_page_only_with_a_session() {
+    run(link_delivery());
+}
+
+/// S11-G1b: a signer whose link is not mailed (delivery Link) is signed through a page the requesting app opens with
+/// `signing_link`: a session bound to that signer and a moment at most an hour away. Their bare link opens nothing; a
+/// forged or past session opens nothing; framing needs a site the workspace allows; a person without write on the
+/// request gets no link. Every new device that opens a link is in the trail.
+async fn link_delivery() {
+    use ferrum_kernel::capability::Invocation;
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let ravi = t.user(&acme, "ravi@acme.test", "Ravi Kumar", &["Sign User"]).await;
+    let pdf = contract_pdf("Linked");
+    let draft = json!({"title": "Linked", "document": t.upload(&asha, "l.pdf", &pdf).await,
+        "signers": [{"role": "Guest", "name": "Gil", "email": "gil@guest.test", "delivery": "Link"},
+                    {"role": "Host", "name": "Hana", "email": "hana@acme.test"}],
+        "fields": [field("Guest", "Signature", "G", 1, 72, 600, 200, 50), field("Host", "Signature", "H", 1, 320, 600, 200, 50)],
+        "signing_mode": "Parallel"});
+    let id = uid(&t.k.insert(&asha, "SignRequest", obj(draft)).await.unwrap());
+    let sent = t.action(&asha, id, "send", json!({})).await;
+    let rows = sent["signers"].as_array().unwrap();
+    let guest_row = rows.iter().find(|l| l["role"] == json!("Guest")).unwrap();
+    assert!(guest_row.get("url").is_none() && guest_row["delivery"] == json!("Link"), "no link handed out for the app's signer: {guest_row}");
+    let r = t.get(&asha, "SignRequest", id).await;
+    let key = t.key(&acme).await;
+    let gil = token_for(&key, acme.id, id, uid(&signer_row(&r, "Guest")), "gil@guest.test");
+    refused(t.view(&acme, &gil, None).await, "not found");
+
+    // A person who may not change the request gets no link.
+    let ask = |minutes: i64, embed: bool| {
+        Invocation::new("sign.sign_request.signing_link", json!({"id": id, "params": {"signer": "Guest", "minutes": minutes, "embed": embed}}))
+    };
+    assert!(t.k.invoke(&ravi, ask(10, false).key("ravi")).await.is_err(), "Ravi cannot issue Asha's signer a link");
+    assert!(
+        t.k.invoke(&asha, Invocation::new("sign.sign_request.signing_link", json!({"id": id, "params": {"signer": "Host"}})).key("host")).await.is_err(),
+        "a mailed signer's link is not issued this way"
+    );
+    assert!(t.k.invoke(&asha, ask(61, false).key("long")).await.is_err(), "at most an hour");
+    let m = refused(t.k.invoke(&asha, ask(10, true).key("framed")).await, "invalid");
+    assert!(m.contains("allow"), "framing needs an allowed site: {m}");
+
+    let given = t.k.invoke(&asha, ask(10, false).key("asha:1")).await.expect("a link").result;
+    let url = given["url"].as_str().unwrap().to_string();
+    assert!(url.contains(&format!("/sign/s/acme/{gil}?e=")) && !url.contains("embed"), "{url}");
+    let session = url.split("?e=").nth(1).unwrap().to_string();
+    let open = |session: String| {
+        let (t, acme, gil) = (&t, &acme, gil.clone());
+        async move { t.site_with(acme, "GET", &format!("/signing/{gil}"), &[("x-sign-session", &session)], vec![]).await }
+    };
+    assert_eq!(open(session.clone()).await.expect("the page opens").status, 200);
+    assert!(t.trail(&acme, id).await.contains(&"Link Issued:Guest".to_string()));
+    // Forged, another signer's, or past its moment: nothing.
+    let host = uid(&signer_row(&r, "Host"));
+    for bad in [
+        format!("{}A", &session[..session.len() - 1]),
+        session_for(&key, acme.id, host, "gil@guest.test", chrono::Utc::now().timestamp() + 600),
+        session_for(&key, acme.id, uid(&signer_row(&r, "Guest")), "gil@guest.test", chrono::Utc::now().timestamp() - 1),
+    ] {
+        refused(open(bad).await, "not found");
+    }
+
+    // Framed, once the workspace allows a site for the signing page.
+    t.k.insert(&acme.admin, "Embedding", obj(json!({"page": "sign/s", "origins": "https://partner.example"}))).await.expect("an embedding");
+    let framed = t.k.invoke(&asha, ask(5, true).key("asha:2")).await.expect("a framed link").result;
+    assert!(framed["url"].as_str().unwrap().ends_with("&embed=1"));
+
+    // Devices: the same browser again is nothing new; another one is in the trail.
+    open(session.clone()).await.unwrap();
+    assert_eq!(t.count(&acme, id, "Viewed").await, 1);
+    t.site_with(&acme, "GET", &format!("/signing/{gil}"), &[("x-sign-session", &session), ("user-agent", "Other/1.0")], vec![]).await.unwrap();
+    assert_eq!(t.count(&acme, id, "Viewed").await, 2, "another device is recorded");
+    let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+    let details: Vec<Option<String>> =
+        sqlx::query_scalar("select details from e_sign_event where tenant_id = $1 and request = $2 and event = 'Viewed' order by seq")
+            .bind(acme.id)
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(details, [None, Some("another device".to_string())]);
+
+    // No reminder goes to a signer whose page the app opens.
+    t.sql(&acme, "update e_sign_request__signers set sent_at = now() - interval '9 days' where tenant_id = $1 and parent_id = $2", id).await.unwrap();
+    t.maintenance(&acme).await;
+    let reminded = t.trail(&acme, id).await.into_iter().filter(|e| e.starts_with("Reminded")).collect::<Vec<_>>();
+    assert_eq!(reminded, ["Reminded:Host"], "the mailed signer only");
+
+    // The session signs.
+    let (status, done) = t
+        .site_with(
+            &acme,
+            "POST",
+            &format!("/signing/{gil}/sign"),
+            &[("x-sign-session", &session)],
+            json!({"consent": true, "signature": {"text": "Gil"}}).to_string().into_bytes(),
+        )
+        .await
+        .map(|r| (r.status, serde_json::from_slice::<Value>(&r.body).unwrap()))
+        .unwrap();
+    assert_eq!((status, done["status"].clone()), (200, json!("Signed")));
+}
+
+/// A session computed from the documented format, independently of Sign's code.
+fn session_for(key: &[u8], tenant: Uuid, signer: Uuid, email: &str, expires: i64) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
+    for part in [b"ferrum-sign/session/v1".as_slice(), tenant.as_bytes(), signer.as_bytes(), email.as_bytes(), &expires.to_be_bytes()] {
+        mac.update(&(part.len() as u32).to_be_bytes());
+        mac.update(part);
+    }
+    let mut raw = expires.to_be_bytes().to_vec();
+    raw.extend_from_slice(&mac.finalize().into_bytes()[..16]);
+    URL_SAFE_NO_PAD.encode(raw)
 }
 
 /// What opens the test's vault: the database password of `url`, with Argon2id kept cheap for tests.

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.1
+
+Needs the same platform as 0.5.0. Package `sign` 0.3.1 (two signer fields, one action). No interface screen added; the
+signer's page sends a session it was opened with.
+
+- **A signer whose page another app opens.** A signer's `delivery` can be Link: nothing is mailed to them, and their
+  link alone opens nothing. The app that asked (or the sender) calls `signing_link` and gets a link that opens that
+  signer's page for 1 to 60 minutes (never past the request's expiry), bound to the signer and that moment by a tag
+  under the workspace's signing key; framed only on a site the workspace allows for `sign/s`. Each link issued is in
+  the trail. No reminders go to such a signer.
+- **Forwarded links show.** Every device that opens a signing link is kept as a keyed hash; a second device is a
+  "Viewed: another device" line in the trail.
+- In-person signing is not offered yet: it waits for the platform's check that a person is at the screen.
+
 ## 0.5.0
 
 Needs the same platform as 0.4.2. Package `sign` 0.3.0: callers declare `uses` at `^0.3` (Contracts' `^0.2` uses

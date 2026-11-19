@@ -9,7 +9,8 @@
 //! * `POST /signing/{token}/decline` — `{reason}`
 //! * `POST /verify` — a PDF as the body: is it a document sealed here, unchanged?
 //!
-//! The access code, when the signer has one, goes in the `X-Access-Code` header. Signed-in users
+//! The access code, when the signer has one, goes in the `X-Access-Code` header; the session of a signer whose link is
+//! not mailed (`signing_link`), in `X-Sign-Session`. Signed-in users
 //! have no endpoints here: they work through the records API and the requests' actions.
 
 use crate::signing::{self, Client, Gate, Reply};
@@ -46,6 +47,7 @@ impl Site for SignSite {
             ip: req.client_ip.clone(),
             user_agent: header(&req, "user-agent").map(|u| clean(u, 500)),
             access_code: header(&req, "x-access-code").map(|c| clean(c, 64)),
+            session: header(&req, "x-sign-session").map(|c| clean(c, 64)),
         };
         let tenant = req.tenant;
         let mut resp = match (req.method.as_str(), path.as_slice()) {
