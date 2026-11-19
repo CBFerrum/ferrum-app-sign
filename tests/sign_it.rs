@@ -1688,6 +1688,54 @@ async fn link_delivery() {
         .map(|r| (r.status, serde_json::from_slice::<Value>(&r.body).unwrap()))
         .unwrap();
     assert_eq!((status, done["status"].clone()), (200, json!("Signed")));
+
+    // in_person_needs_a_person_at_the_screen: a host signed in at this screen, who says they checked who signs.
+    let draft = json!({"title": "Counter", "document": t.upload(&asha, "c.pdf", &pdf).await,
+        "signers": [{"role": "Customer", "name": "Cleo", "email": "cleo@client.test", "delivery": "In Person"}],
+        "fields": [field("Customer", "Signature", "C", 1, 72, 600, 200, 50)]});
+    let counter = uid(&t.k.insert(&asha, "SignRequest", obj(draft)).await.unwrap());
+    t.action(&asha, counter, "send", json!({})).await;
+    let host = |checked: bool| json!({"signer": "Customer", "checked_identity": checked});
+    // Asha's context as loaded for a job, a key or an app is not at a screen.
+    let m = refused(t.k.run_action(&asha, "SignRequest", counter, "signing_link", host(true)).await, "forbidden");
+    assert!(m.contains("at this screen"), "{m}");
+    let mut at_screen = asha.clone();
+    at_screen.made = ferrum_kernel::ctx::Made::Screen;
+    assert!(at_screen.at_screen());
+    refused(t.k.run_action(&at_screen, "SignRequest", counter, "signing_link", host(false)).await, "invalid");
+    let given = t.k.run_action(&at_screen, "SignRequest", counter, "signing_link", host(true)).await.expect("hosted");
+    let url = given["url"].as_str().unwrap();
+    let (token, session) = url.rsplit('/').next().unwrap().split_once("?e=").unwrap();
+    let r = t.get(&asha, "SignRequest", counter).await;
+    assert_eq!(signer_row(&r, "Customer")["hosted_by"], json!("asha@acme.test"));
+    let (status, _) = t
+        .site_with(
+            &acme,
+            "POST",
+            &format!("/signing/{token}/sign"),
+            &[("x-sign-session", session)],
+            json!({"consent": true, "signature": {"text": "Cleo"}}).to_string().into_bytes(),
+        )
+        .await
+        .map(|r| (r.status, ()))
+        .unwrap();
+    assert_eq!(status, 200);
+    let r = t.get(&asha, "SignRequest", counter).await;
+    assert_eq!(r["status"], json!("Completed"));
+    let sealed: Uuid = r["sealed_document"].as_str().unwrap()[7..].parse().unwrap();
+    let (_, _, bytes) = t.k.read_file(&asha, sealed).await.unwrap();
+    let parsed = lopdf::Document::load_mem(&bytes).unwrap();
+    let text: String = parsed.get_pages().values().map(|p| String::from_utf8_lossy(&parsed.get_page_content(*p)).to_string()).collect();
+    assert!(text.contains(&hex::encode("hosted")), "the certificate names the host");
+    let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+    let signed: Option<String> = sqlx::query_scalar("select details from e_sign_event where tenant_id = $1 and request = $2 and event = 'Signed'")
+        .bind(acme.id)
+        .bind(counter)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(signed.as_deref(), Some("signature typed; signed in person, hosted by asha@acme.test"));
 }
 
 /// A session computed from the documented format, independently of Sign's code.

@@ -351,7 +351,8 @@ fn named<'a>(signers: &'a [Doc], want: &str) -> Result<&'a Doc> {
 
 /// `signing_link`: a link that opens the signing page of a signer whose link is not mailed, for minutes (S11-G1). Their
 /// bare link opens nothing (`signing::open`); this one carries a session bound to them and its moment. Framed only on a
-/// site the workspace allows for `sign/s` (BD-80: the platform sets the page's frame policy).
+/// site the workspace allows for `sign/s` (BD-80: the platform sets the page's frame policy). An in-person signer's is
+/// asked by a person at the screen (`Ctx::at_screen`), who says they checked who signs and is named as the host.
 async fn signing_link(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Value> {
     let (k, ctx) = (hc.kernel, hc.ctx);
     not_expired(doc)?;
@@ -377,9 +378,23 @@ async fn signing_link(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result
     if embed && k.embedders(ctx.tenant, "sign/s").await?.is_empty() {
         return Err(Error::field("embed", "no site may frame the signing page: allow one first (Sign Settings, Allow Embedding)"));
     }
+    let in_person = s(&sg, "delivery") == Some("In Person");
+    if in_person {
+        // A decision only a person makes (BD-83): not an app's call, a key, a job or an agent.
+        if !ctx.at_screen() {
+            return Err(Error::Forbidden("in-person signing is hosted by a person signed in at this screen".into()));
+        }
+        if params.get("checked_identity").and_then(Value::as_bool) != Some(true) {
+            return Err(Error::field("checked_identity", "confirm that you checked who is signing"));
+        }
+        set_signer(k, &elevated(ctx), hc.tx, doc_id(&sg)?, json!({"hosted_by": ctx.email.to_lowercase()})).await?;
+    }
     let out = Outbox::load(k, ctx, hc.tx).await?;
     let (url, until) = out.session_link(doc, &sg, minutes, embed)?;
-    let detail = format!("Link for {minutes} minutes{}", if embed { ", framed on an allowed site" } else { "" });
+    let detail = match in_person {
+        true => format!("In person for {minutes} minutes, hosted by {}, who confirmed who is signing", ctx.email.to_lowercase()),
+        false => format!("Link for {minutes} minutes{}", if embed { ", framed on an allowed site" } else { "" }),
+    };
     event::record(k, &elevated(ctx), hc.tx, doc, Entry::new("Link Issued", &ctx.email).signer(&sg).details(detail)).await?;
     Ok(json!({"url": url, "expires_at": ts(until)}))
 }

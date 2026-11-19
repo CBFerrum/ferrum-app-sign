@@ -6,7 +6,7 @@ import { Editor, useBoxes } from "./Editor";
 import type { SignRequest } from "./model";
 import { draftOf } from "./send";
 import { Review, SignersStep } from "./Prepare";
-import { RequestView } from "./RequestPage";
+import { HostDialog, RequestView } from "./RequestPage";
 import { LinksDialog } from "./Links";
 import { MarkPad, MarkView } from "./Pad";
 import { Requests } from "./Requests";
@@ -174,6 +174,13 @@ describe("the screen that follows a request", () => {
     expect(html).toContain("Download the signed copy");
     expect(html).toContain("Signed copy");
     expect(html).not.toContain("Send a reminder");
+  });
+
+  it("asks the host of an in-person signer to say they checked who is signing", () => {
+    const signer = { ...request().signers[0], delivery: "In Person" as const };
+    const html = renderToStaticMarkup(<HostDialog request={request()} signer={signer} onClose={() => {}} />);
+    expect(html).toContain("I checked that the person signing is");
+    expect(html).toContain("Open their page");
   });
 
   it("says why a request that did not finish ended", () => {

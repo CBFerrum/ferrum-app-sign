@@ -304,6 +304,14 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
                 >
                   <input id={`s-code-${i}`} className="input" value={s.accessCode} autoComplete="off" minLength={4} maxLength={64} onChange={(e) => apply((d) => editSigner(d, s.key, { accessCode: e.target.value }))} />
                 </Field>
+                {s.delivery !== "Link" && (
+                  <Field label={t("How they sign")} htmlFor={`s-delivery-${i}`} hint={s.delivery === "In Person" ? t("You open their page here when they are with you, after checking who they are.") : t("Their link is emailed to them.")}>
+                    <select id={`s-delivery-${i}`} className="input" value={s.delivery} onChange={(e) => apply((d) => editSigner(d, s.key, { delivery: e.target.value as "Email" | "In Person" }))}>
+                      <option value="Email">{t("By email")}</option>
+                      <option value="In Person">{t("In person, here")}</option>
+                    </select>
+                  </Field>
+                )}
               </div>
               {shown("signers")
                 .filter((p) => p.signer === s.key)

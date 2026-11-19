@@ -509,6 +509,10 @@ async fn apply_signature(k: &Kernel, sys: &Ctx, tx: &mut Tx, o: &Opened, plan: S
         Some(Ink::Drawn(_)) => "signature drawn",
         _ => "signature typed",
     };
+    let method = match s(&o.signer, "hosted_by") {
+        Some(host) if s(&o.signer, "delivery") == Some("In Person") => format!("{method}; signed in person, hosted by {host}"),
+        _ => method.to_string(),
+    };
     event::record(k, sys, tx, &o.request, Entry::new("Signed", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref()).details(method))
         .await?;
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.2
+
+Needs Ferrum with `Ctx::at_screen()` (S1-P0c). Package `sign` 0.3.2 (one option, one field, one parameter). Interface
+rebuilt (`ui/dist`).
+
+- **In-person signing.** A signer's delivery can be In Person. On the request's page, "Sign in person here" asks the
+  host to confirm they checked who is signing, then opens that signer's page on this device for 15 minutes. Only a
+  person signed in at the screen can host: an app's call, an API key, a job or an agent is refused. The host is named
+  on the signer, in the trail ("signed in person, hosted by …") and on the certificate.
+- The send step asks how each signer signs: by email, or in person here.
+
 ## 0.5.1
 
 Needs the same platform as 0.5.0. Package `sign` 0.3.1 (two signer fields, one action). No interface screen added; the
@@ -12,7 +23,6 @@ signer's page sends a session it was opened with.
   the trail. No reminders go to such a signer.
 - **Forwarded links show.** Every device that opens a signing link is kept as a keyed hash; a second device is a
   "Viewed: another device" line in the trail.
-- In-person signing is not offered yet: it waits for the platform's check that a person is at the screen.
 
 ## 0.5.0
 

@@ -227,10 +227,14 @@ impl Certificate {
                             Some("text") => " · one-time code sent to their phone confirmed",
                             _ => "",
                         };
+                        let hosted = match s(r, "hosted_by") {
+                            Some(host) if s(r, "delivery") == Some("In Person") => format!(" · signed in person, hosted by {host}"),
+                            _ => String::new(),
+                        };
                         [
                             who,
                             format!(
-                                "Signed {} · {method}{code}{identity} · agreed to sign electronically",
+                                "Signed {} · {method}{code}{identity}{hosted} · agreed to sign electronically",
                                 time(r, "signed_at").map(human).unwrap_or_default()
                             ),
                             format!("IP hash {} · {}", s(r, "ip_hash").unwrap_or("-"), s(r, "user_agent").unwrap_or("unknown device")),

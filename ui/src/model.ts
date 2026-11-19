@@ -23,7 +23,12 @@ export interface Signer {
   /** Set when the signer has an access code; the code itself is never given back. */
   access_code_hash?: string | null;
   signature_text?: string | null;
+  /** How they get to their page: a mailed link, a page another app opens, or hosted here in person. */
+  delivery?: Delivery | null;
+  hosted_by?: string | null;
 }
+
+export type Delivery = "Email" | "Link" | "In Person";
 
 export interface FieldRow {
   id?: string;

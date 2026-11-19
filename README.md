@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.5.1-4f46e5?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.2-4f46e5?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 [![CI](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml)
@@ -41,7 +41,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 
 | | |
 |---|---|
-| 📦 **Version** | 0.5.1 |
+| 📦 **Version** | 0.5.2 |
 | 🖥️ **Kind** | Its own interface at `/sign/` and a page for signers at `/sign/s/{workspace}/{token}`, with Ferrum's records screens for the rest |
 | ➕ **What it adds** | 7 entities in one package, 2 roles, 3 reports, a launcher app, a Create menu entry, one message template, 4 events other apps can follow, an assistant |
 | 🧱 **Depends on** | The platform's `core` package. Nothing else is required |
@@ -125,6 +125,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 - **Consent is explicit.** Signing needs the signer's agreement to sign electronically.
 - **Decline with a reason.** The request ends for everyone and the sender is told.
 - **Opened by another app.** A signer whose `delivery` is Link gets no mail: the app that asked opens their page with `signing_link`, a link that lasts 1 to 60 minutes and opens only that signer's page; their bare link opens nothing. It can be framed on a site the workspace allows.
+- **In person.** A signer marked In Person signs on the sender's device: the host confirms they checked who is signing and is named in the trail and on the certificate. Only a person signed in at the screen can host.
 - **Reassign.** When the sender allows it, a signer can hand over to a colleague (an event is recorded).
 - **Plain answers when a link cannot be used.** The page says plainly when a link is spent, withdrawn, expired or not yet the signer's turn.
 - **The kind of signature, said openly.** The page and the certificate say that this is a simple electronic signature with an audit trail, not a PAdES, advanced or qualified one, and how each signer was checked.
@@ -315,7 +316,7 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 | Void and correct a signer's email | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Word and Office files as the source | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Several documents in one request | ❌ | ✅ | ✅ | ✅ | ✅ | 🟡 |
-| In-person signing | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| In-person signing | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Payments collected at signing | ❌ | ✅ | ✅ | ❌ | 🟡 | ❌ |
 | Branding and editable email wording | 🟡 ² | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Webhooks and embedded signing | 🟡 ³ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -345,7 +346,7 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 - 📜 Advanced and qualified signatures, and Aadhaar eSign, through trust providers.
 - 🪪 ID document checks and a shipped text-message provider.
 - 📎 Word and Office files as the source, several documents in one request, bulk send and more field types.
-- 🧑‍🤝‍🧑 In-person signing, payments at signing and embedded signing in other sites.
+- 🧑‍🤝‍🧑 Payments at signing and embedded signing in other sites.
 - 🎨 Branding and editable wording per workspace and template.
 - 📱 Native mobile apps.
 
@@ -356,6 +357,7 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 
 ### ✅ Recently shipped
 
+- [x] **0.5.2** In-person signing hosted by a person at the screen, named on the certificate.
 - [x] **0.5.1** Signers whose page another app opens (delivery Link, `signing_link`), and every new device that opens a link in the trail.
 - [x] **0.5.0** Operations with contracts for other apps and agents, `request_voided`, a code by default for requests from other records.
 - [x] **0.4.2** Reports group and count only by fields the caller may read.
@@ -392,7 +394,7 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 
 ### 🔭 Later
 
-- [ ] In-person signing on one device, and print-sign-upload.
+- [ ] Print-sign-upload.
 - [ ] Embedded signing in other sites and signed webhooks per event.
 - [ ] Branding: logo, colours, and editable invitation, reminder and consent wording per template and language.
 - [ ] Payments collected at signing through the Commerce payment connector.
