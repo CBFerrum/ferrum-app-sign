@@ -3,7 +3,7 @@
 
 use crate::{doc_id, token};
 use async_trait::async_trait;
-use ferrum_kernel::{Ctx, Doc, DocHook, HookCtx, Kernel, Result, Tx};
+use ferrum_kernel::{Ctx, Doc, DocHook, Error, HookCtx, Kernel, Result, Tx};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -69,11 +69,36 @@ pub struct SettingsHook;
 
 #[async_trait]
 impl DocHook for SettingsHook {
-    async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, _params: &Value) -> Result<Option<Value>> {
-        if name != "rotate_signing_key" {
-            return Ok(None);
+    async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
+        match name {
+            "rotate_signing_key" => {
+                token::rotate_key(hc.kernel, hc.ctx, hc.tx, doc_id(doc)?).await?;
+                Ok(Some(json!({"rotated": true})))
+            }
+            "allow_embedding" => allow_embedding(hc, params).await.map(Some),
+            _ => Ok(None),
         }
-        token::rotate_key(hc.kernel, hc.ctx, hc.tx, doc_id(doc)?).await?;
-        Ok(Some(json!({"rotated": true})))
     }
 }
+
+/// The Embedding of the signing page (`sign/s`) holds these origins: the platform frames the page only for them. The
+/// record is the workspace's own (written as the system, once, under a lock on its page address); the Embedding's own
+/// check refuses a path, a plain-http site that is not local, or more than ten.
+async fn allow_embedding(hc: &mut HookCtx<'_>, params: &Value) -> Result<Value> {
+    let origins = params.get("origins").and_then(Value::as_str).map(|o| o.trim().to_string()).filter(|o| !o.is_empty());
+    let origins = origins.ok_or_else(|| Error::field("origins", "name at least one site, such as https://www.example.com"))?;
+    let sys = ferrum_domain::util::sys(hc.ctx);
+    let mut input = Doc::new();
+    input.insert("page".into(), json!(PAGE));
+    input.insert("origins".into(), json!(origins));
+    input.insert("note".into(), json!("Set by Sign: Allow Embedding"));
+    let found: Option<Uuid> = sqlx::query_scalar("select id from e_embedding where tenant_id = $1 and page = $2 for update").bind(hc.ctx.tenant).bind(PAGE).fetch_optional(&mut **hc.tx).await?;
+    match found {
+        Some(id) => hc.kernel.update_tx(&sys, hc.tx, "Embedding", id, input, None).await.map(|_| ())?,
+        None => hc.kernel.insert_tx(&sys, hc.tx, "Embedding", input).await.map(|_| ())?,
+    }
+    Ok(json!({"page": PAGE}))
+}
+
+/// The signing page's address in the platform's Embeddings.
+const PAGE: &str = "sign/s";

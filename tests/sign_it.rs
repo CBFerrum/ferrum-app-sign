@@ -2243,3 +2243,35 @@ async fn several_documents() {
     t.store.restore(third, kept);
     assert_eq!(t.action(&asha, id, "verify", json!({})).await["valid"], json!(true));
 }
+
+#[test]
+fn the_signing_page_may_be_framed_only_where_the_manager_allowed() {
+    run(embedding());
+}
+
+/// S4-S1: `allow_embedding` writes the workspace's Embedding for `sign/s` (once, replaced by the next call); the platform
+/// then frames the page for those sites only. An origin that is a path or plain http, or no site at all, is refused; a
+/// Sign User cannot.
+async fn embedding() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let settings = uid(&t.k.insert(&mira, "SignSettings", obj(json!({"sender_name": "Acme Corp"}))).await.unwrap());
+    let allow = |who: &Ctx, origins: &str| {
+        let (k, who, origins) = (t.k.clone(), who.clone(), origins.to_string());
+        async move { k.run_action(&who, "SignSettings", settings, "allow_embedding", json!({"origins": origins})).await }
+    };
+    assert!(t.k.embedders(acme.id, "sign/s").await.unwrap().is_empty(), "nowhere before");
+    let done = allow(&mira, "https://www.example.com\nhttps://shop.example.org").await.unwrap();
+    assert_eq!(done["page"], json!("sign/s"));
+    assert_eq!(t.k.embedders(acme.id, "sign/s").await.unwrap(), vec!["https://www.example.com".to_string(), "https://shop.example.org".to_string()]);
+    allow(&mira, "https://only.example.net").await.unwrap();
+    assert_eq!(t.k.embedders(acme.id, "sign/s").await.unwrap(), vec!["https://only.example.net".to_string()], "replaced, not added to");
+    assert_eq!(t.scalar0::<i64>(&acme, "select count(*) from e_embedding where page = 'sign/s'").await, 1, "one record, however often it is set");
+    for bad in ["https://www.example.com/path", "http://evil.test", "   ", "not a site"] {
+        refused(allow(&mira, bad).await, "invalid");
+    }
+    assert_eq!(t.k.embedders(acme.id, "sign/s").await.unwrap(), vec!["https://only.example.net".to_string()], "a refused call changes nothing");
+    refused(allow(&asha, "https://www.example.com").await, "forbidden");
+}

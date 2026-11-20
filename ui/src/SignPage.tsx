@@ -74,6 +74,14 @@ export function SigningPage() {
   const base = link ? `/api/site/${enc(link.tenant)}/sign/signing/${enc(link.token)}` : "";
   useShellTitle(phase.kind === "ready" ? phase.view.request.title : tr("Sign a document"));
 
+  // Framed on a site the workspace allowed (`?embed=1`): tell the site when the signer is done, whichever way. The page
+  // says nothing else; the app that opened it learns the outcome from Sign's events.
+  const embedded = useMemo(() => new URLSearchParams(window.location.search).get("embed") === "1", []);
+  useEffect(() => {
+    if (!embedded || (phase.kind !== "signed" && phase.kind !== "declined")) return;
+    (window as { ferrum?: { embedDone?: () => void } }).ferrum?.embedDone?.();
+  }, [embedded, phase.kind]);
+
   // No session goes along: the link is the signer's whole credential.
   const call = useCallback(
     (path: string, init: RequestInit = {}) =>

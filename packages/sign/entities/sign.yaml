@@ -4,7 +4,7 @@
   module: sign
   fields:
     - {name: sender_name, type: data, max_length: 100, description: "Name signers see as the sender in emails and on the signing page (default: the workspace name)"}
-    - {name: public_url, type: url, label: Public URL, description: "Address this server is reached at from the internet (e.g. https://erp.example.com), for signing links in emails; empty = the Mail app's Public URL"}
+    - {name: public_url, type: url, label: Public URL, description: "Address this server is reached at from the internet (e.g. https://erp.example.com), for signing links in emails; empty = where the platform sends people outside the workspace"}
     - {name: link_expiry_days, type: int, default: 30, min: 1, max: 365, description: "Requests without an expiry date close this many days after they are sent; their signing links stop working then"}
     - {name: reminder_every_days, type: int, default: 3, min: 0, max: 60, description: "Signers whose turn it is are reminded after this many days without signing, then at the same interval; 0 = no automatic reminders"}
     - {name: max_reminders, type: int, default: 3, min: 0, max: 20, description: "Automatic reminders per signer at most"}
@@ -20,6 +20,15 @@
         effect: transactional_action
         returns: {type: object, properties: {rotated: {type: boolean}}}
         completion: "A new signing key is stored; every link sent before it stops working"
+    - name: allow_embedding
+      label: Allow Embedding
+      permission: write
+      params:
+        - {name: origins, type: text, label: Sites, required: true, description: "The sites that may show the signing page in a frame, one per line as https://www.example.com (at most ten; http only for localhost)"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {page: {type: string, const: "sign/s"}}}
+        completion: "The signing page may be shown in a frame on exactly these sites (the workspace's Embedding for sign/s holds them)"
 
 - name: SignTemplateRole
   label: Sign Template Role
