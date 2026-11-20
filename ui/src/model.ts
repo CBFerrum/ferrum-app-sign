@@ -48,6 +48,7 @@ export interface FieldRow {
   max_value?: string | null;
   decimals?: number | null;
   accept?: string | null;
+  document_no?: number | null;
 }
 
 export interface SignRequest {
@@ -62,6 +63,8 @@ export interface SignRequest {
   document_sha256?: string | null;
   page_count?: number | null;
   page_sizes?: [number, number][] | null;
+  /** Documents 2 onwards of the request (the first is the fields above). */
+  more_documents?: { id?: string; document?: string | null; document_name?: string | null; page_count?: number | null; page_sizes?: [number, number][] | null }[] | null;
   signing_mode: "Sequential" | "Parallel";
   expires_on?: string | null;
   expires_at?: string | null;

@@ -19,6 +19,8 @@ export interface Box extends Rect {
   label: string;
   page: number;
   required: boolean;
+  /** Which document of the request it is on (1, the main one, when absent). */
+  document_no?: number;
   /** Dropdown, Radio: the choices. */
   options?: string[];
   /** Number: the bounds (text, empty for none) and the places allowed. */
@@ -192,6 +194,7 @@ export const toBoxes = (rows: FieldRow[]): Box[] =>
     width: num(r.width, 100),
     height: num(r.height, 30),
     required: r.required !== false,
+    ...(r.document_no && r.document_no > 1 ? { document_no: r.document_no } : {}),
     ...(r.options ? { options: r.options } : {}),
     ...(r.min_value ? { min_value: r.min_value } : {}),
     ...(r.max_value ? { max_value: r.max_value } : {}),
@@ -212,6 +215,7 @@ export const toRows = (boxes: Box[]) =>
     width: String(whole(b.width)),
     height: String(whole(b.height)),
     required: b.required,
+    document_no: b.document_no ?? 1,
     ...(b.field_type === "Dropdown" || b.field_type === "Radio" ? { options: b.options ?? [] } : {}),
     ...(b.field_type === "Radio" ? { option_boxes: radioBoxes(b, (b.options ?? []).length) } : {}),
     ...(b.field_type === "Number" ? { min_value: b.min_value?.trim() || null, max_value: b.max_value?.trim() || null, decimals: b.decimals ?? 0 } : {}),

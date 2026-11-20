@@ -32,6 +32,8 @@ export interface SigningField {
   /** Attachment: the kinds of file allowed, and what this signer has uploaded so far. */
   accept?: string[];
   uploaded?: { name?: string | null; size?: number | null; file?: string | null } | null;
+  /** Which document of the request the box is on (1, the main one, when absent). */
+  document_no?: number;
 }
 
 export interface SigningView {
@@ -45,6 +47,8 @@ export interface SigningView {
     document_name?: string | null;
     document_sha256?: string | null;
     pages: PageSize[];
+    /** Every document of the request, the main one first; each with its pages. */
+    documents?: { n: number; name: string; sha256?: string | null; pages: PageSize[] }[];
     sender: { organization?: string | null; name?: string | null; email?: string | null };
   };
   signer: { role?: string | null; name?: string | null; email?: string | null; status?: string | null };

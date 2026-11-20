@@ -448,5 +448,10 @@
   "Largest": "الأكبر",
   "Places": "المنازل العشرية",
   "Kinds of file": "أنواع الملفات",
-  "pdf, png, jpg; empty for all three.": "pdf أو png أو jpg؛ اتركه فارغاً لقبول الثلاثة."
+  "pdf, png, jpg; empty for all three.": "pdf أو png أو jpg؛ اتركه فارغاً لقبول الثلاثة.",
+  "Documents": "المستندات",
+  "More documents": "مستندات إضافية",
+  "Signed in the same request, each with its own boxes. At most 19 more.": "توقَّع في الطلب نفسه، ولكل مستند مربعاته. 19 مستنداً إضافياً كحد أقصى.",
+  "Remove": "إزالة",
+  "Document {n}: {name}": "المستند {n}: {name}"
 }

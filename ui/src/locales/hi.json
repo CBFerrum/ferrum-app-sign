@@ -448,5 +448,10 @@
   "Largest": "अधिकतम",
   "Places": "दशमलव स्थान",
   "Kinds of file": "फ़ाइल के प्रकार",
-  "pdf, png, jpg; empty for all three.": "pdf, png, jpg; तीनों के लिए खाली छोड़ें।"
+  "pdf, png, jpg; empty for all three.": "pdf, png, jpg; तीनों के लिए खाली छोड़ें।",
+  "Documents": "दस्तावेज़",
+  "More documents": "और दस्तावेज़",
+  "Signed in the same request, each with its own boxes. At most 19 more.": "उसी अनुरोध में हस्ताक्षर होते हैं, हर एक के अपने बॉक्स। अधिकतम 19 और।",
+  "Remove": "हटाएँ",
+  "Document {n}: {name}": "दस्तावेज़ {n}: {name}"
 }

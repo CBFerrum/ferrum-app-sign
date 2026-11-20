@@ -26,6 +26,7 @@ import {
   isDone,
   locate,
   type Mark,
+  type PageSize,
   nextTask,
   pagesText,
   pagesWithFields,
@@ -384,6 +385,11 @@ export function Ready({
     }
   };
 
+  const renderBox = (f: SigningField, size: PageSize) => {
+    const task = tasks.find((t) => t.fields.some((x) => x.id === f.id));
+    return <Box key={f.id} field={f} size={size} state={boxState(f, tasks, entry, target?.key ?? null)} entry={entry} name={name} names={names} task={task} problem={problems[task?.key ?? ""]} onActivate={activate} />;
+  };
+
   const primary = () => {
     if (target) activate(target);
     else setDialog({ kind: "review" });
@@ -518,7 +524,7 @@ export function Ready({
           </div>
           {(pdf ? request.pages.map((p) => p.page) : pages).map((n) => {
             const size = request.pages.find((p) => p.page === n) ?? { page: n, width: 612, height: 792 };
-            const here = fields.filter((f) => f.page === n);
+            const here = fields.filter((f) => f.page === n && (f.document_no ?? 1) === 1);
             return (
               <Sheet
                 key={n}
@@ -528,15 +534,15 @@ export function Ready({
                 picture={pdf && <PdfPage pdf={pdf} number={n} />}
                 note={here.length ? (here.length === 1 ? tr("1 box for you") : tr("{n} boxes for you", { n: here.length })) : undefined}
               >
-                {here.map((f) => {
-                  const task = tasks.find((t) => t.fields.some((x) => x.id === f.id));
-                  return (
-                    <Box key={f.id} field={f} size={size} state={boxState(f, tasks, entry, target?.key ?? null)} entry={entry} name={name} names={names} task={task} problem={problems[task?.key ?? ""]} onActivate={activate} />
-                  );
-                })}
+                {here.map((f) => renderBox(f, size))}
               </Sheet>
             );
           })}
+          {(request.documents ?? [])
+            .filter((d) => d.n > 1)
+            .map((d) => (
+              <ExtraDocument key={d.n} doc={d} base={base} call={call} fields={fields} box={renderBox} />
+            ))}
           <p className="sg-end muted">
             {tr("That's everything on the pages.")} <button type="button" className="link-btn" onClick={() => setDialog({ kind: "decline" })}>{tr("Can't sign this? Decline…")}</button>
           </p>
@@ -819,6 +825,31 @@ export function Ready({
       <DeclineDialog open={dialog?.kind === "decline"} onClose={() => setDialog(null)} onDecline={decline} />
       <AboutDialog open={dialog?.kind === "about"} onClose={() => setDialog(dialog?.kind === "about" ? dialog.back : null)} />
     </div>
+  );
+}
+
+/** A further document of the request: its pages, drawn from the PDF when it can be, with the signer's boxes on them. */
+function ExtraDocument({ doc, base, call, fields, box }: { doc: { n: number; name: string; pages: PageSize[] }; base: string; call: Call; fields: SigningField[]; box: (f: SigningField, size: PageSize) => ReactNode }) {
+  const pdf = usePdf(() => call(`/document?n=${doc.n}`).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText)))), `${base}#${doc.n}`);
+  return (
+    <section aria-label={doc.name}>
+      <h2 className="sg-h2">{isolate(tr("Document {n}: {name}", { n: doc.n, name: doc.name }))}</h2>
+      {doc.pages.map((size) => {
+        const here = fields.filter((f) => f.document_no === doc.n && f.page === size.page);
+        return (
+          <Sheet
+            key={size.page}
+            number={size.page}
+            count={doc.pages.length}
+            size={size}
+            picture={pdf && <PdfPage pdf={pdf} number={size.page} />}
+            note={here.length ? (here.length === 1 ? tr("1 box for you") : tr("{n} boxes for you", { n: here.length })) : undefined}
+          >
+            {here.map((f) => box(f, size))}
+          </Sheet>
+        );
+      })}
+    </section>
   );
 }
 

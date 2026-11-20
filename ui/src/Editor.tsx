@@ -59,7 +59,7 @@ export interface Role {
   label: string;
 }
 
-export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes; roles: Role[]; pages: Size[]; onPdf?: () => void; document?: string | null }) {
+export function Editor({ ed, roles, pages, onPdf, document: path, all }: { ed: Boxes; roles: Role[]; pages: Size[]; onPdf?: () => void; document?: string | null; all?: Box[] }) {
   const { boxes } = ed;
   const pdf = usePdf(path ? () => fetch(path, { credentials: "same-origin" }).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText)))) : null, path ?? "");
   const names = roles.map((r) => r.role);
@@ -75,7 +75,8 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
   const sheets = useRef(new Map<number, HTMLDivElement>());
   const role = names.some((r) => r === active) ? active : (names[0] ?? "");
   const sel = boxes.find((b) => b.key === selected) ?? null;
-  const missing = lacksSignature(boxes, names);
+  // With several documents, the signature a signer needs may be on any of them.
+  const missing = lacksSignature(all ?? boxes, names);
 
   const update = (key: string, change: Partial<Box>) => ed.set((prev) => prev.map((b) => (b.key === key ? { ...b, ...change } : b)));
   const focusBox = (key: string) =>
