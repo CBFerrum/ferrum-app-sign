@@ -453,5 +453,20 @@
   "More documents": "और दस्तावेज़",
   "Signed in the same request, each with its own boxes. At most 19 more.": "उसी अनुरोध में हस्ताक्षर होते हैं, हर एक के अपने बॉक्स। अधिकतम 19 और।",
   "Remove": "हटाएँ",
-  "Document {n}: {name}": "दस्तावेज़ {n}: {name}"
+  "Document {n}: {name}": "दस्तावेज़ {n}: {name}",
+  "Line {n}: a name and a valid address are needed for {role}.": "पंक्ति {n}: {role} के लिए नाम और मान्य पता चाहिए।",
+  "Add at least one recipient.": "कम से कम एक प्राप्तकर्ता जोड़ें।",
+  "At most 1000 recipients in one bulk send.": "एक सामूहिक भेजने में अधिकतम 1000 प्राप्तकर्ता।",
+  "{role} name": "{role} का नाम",
+  "{role} email": "{role} का ईमेल",
+  "Bulk send": "सामूहिक भेजना",
+  "Send one template to many people at once. Each gets a request of their own.": "एक टेम्पलेट कई लोगों को एक साथ भेजें। हर एक को अपना अनुरोध मिलता है।",
+  "A bulk send starts from a template.": "सामूहिक भेजना एक टेम्पलेट से शुरू होता है।",
+  "Choose a template": "टेम्पलेट चुनें",
+  "Title": "शीर्षक",
+  "Every request gets it.": "हर अनुरोध को यही मिलता है।",
+  "Recipients": "प्राप्तकर्ता",
+  "One line each: {columns}. Paste rows from a spreadsheet.": "हर एक की एक पंक्ति: {columns}। स्प्रेडशीट की पंक्तियाँ चिपकाएँ।",
+  "Make the bulk send": "सामूहिक भेजना बनाएँ",
+  "Nothing is sent until you start it.": "जब तक आप शुरू नहीं करते, कुछ नहीं भेजा जाता।"
 }

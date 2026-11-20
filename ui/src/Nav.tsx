@@ -10,6 +10,7 @@ export function Nav() {
         {t("Requests")}
       </NavLink>
       <NavLink to="/templates">{t("Templates")}</NavLink>
+      <NavLink to="/bulk">{t("Bulk send")}</NavLink>
     </nav>
   );
 }

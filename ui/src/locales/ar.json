@@ -453,5 +453,20 @@
   "More documents": "مستندات إضافية",
   "Signed in the same request, each with its own boxes. At most 19 more.": "توقَّع في الطلب نفسه، ولكل مستند مربعاته. 19 مستنداً إضافياً كحد أقصى.",
   "Remove": "إزالة",
-  "Document {n}: {name}": "المستند {n}: {name}"
+  "Document {n}: {name}": "المستند {n}: {name}",
+  "Line {n}: a name and a valid address are needed for {role}.": "السطر {n}: يلزم اسم وعنوان صالح لـ {role}.",
+  "Add at least one recipient.": "أضف مستلماً واحداً على الأقل.",
+  "At most 1000 recipients in one bulk send.": "1000 مستلم كحد أقصى في الإرسال الجماعي الواحد.",
+  "{role} name": "اسم {role}",
+  "{role} email": "بريد {role}",
+  "Bulk send": "إرسال جماعي",
+  "Send one template to many people at once. Each gets a request of their own.": "أرسل قالباً واحداً إلى عدة أشخاص دفعة واحدة. يحصل كل منهم على طلب خاص به.",
+  "A bulk send starts from a template.": "يبدأ الإرسال الجماعي من قالب.",
+  "Choose a template": "اختر قالباً",
+  "Title": "العنوان",
+  "Every request gets it.": "يحصل عليه كل طلب.",
+  "Recipients": "المستلمون",
+  "One line each: {columns}. Paste rows from a spreadsheet.": "سطر لكل مستلم: {columns}. الصق صفوفاً من جدول بيانات.",
+  "Make the bulk send": "إنشاء الإرسال الجماعي",
+  "Nothing is sent until you start it.": "لا يُرسل شيء حتى تبدأه."
 }
