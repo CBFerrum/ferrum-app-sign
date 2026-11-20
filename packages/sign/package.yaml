@@ -91,6 +91,22 @@ messages:
           subject: "Signed: \"{{ doc.title }}\""
           body: "<p>Everyone has signed <strong>{{ doc.title }}</strong> ({{ doc.number }}). The signed PDF with its audit certificate is attached.</p><p style=\"color:#57606a;font-size:13px\">SHA-256 of the attached file: <code>{{ doc.sealed_sha256 }}</code></p>"
 
+connections:
+  - name: sign_timestamp
+    label: Time-stamping authority (RFC 3161)
+    description:
+      base: https://tsa.invalid
+      apps: [sign]
+      operations:
+        stamp:
+          label: Time-stamp a signature's digest
+          method: POST
+          path: /
+          body: {file: "{{ inputs.request_file }}", content_type: application/timestamp-query, max_bytes: 4096}
+          result: {token_file: {file: {max_bytes: 65536}}}
+          inputs: [request_file]
+          changes: false
+
 # What a request about another record says when it ends, for processes to wait on (the request's own
 # update says it too, for automations): {request, number, status, reference_entity, reference_id, sealed_document}, and a
 # voided request's reason.

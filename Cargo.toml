@@ -30,6 +30,12 @@ hmac = "0.12"
 hex = "0.4"
 base64 = "0.22"
 rand = "0.9"
+# The workspace seal (S11-G5): a CMS signature in the PDF by the workspace's key (ECDSA on P-256 or P-384), a self-signed
+# certificate made for it, and an RFC 3161 time stamp. The CMS structures are written with `der` (no `cms` crate).
+der = { version = "0.7", features = ["alloc", "derive", "oid", "pem"] }
+x509-cert = { version = "0.2", default-features = false, features = ["std", "pem"] }
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "std"] }
+p384 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "std"] }
 # PDF parsing and Argon2 run on the blocking pool.
 tokio = { version = "1.45", features = ["rt"] }
 

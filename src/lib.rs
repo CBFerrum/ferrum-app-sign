@@ -13,6 +13,8 @@
 //!   without one, actions return copyable links and people get in-app notifications.
 
 mod bulk;
+mod pades;
+mod tsa;
 mod document;
 mod envelope;
 mod event;
@@ -21,6 +23,7 @@ mod notice;
 mod pdf;
 mod reports;
 mod request;
+mod seal_key;
 mod seal;
 mod settings;
 mod signature;

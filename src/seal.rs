@@ -46,11 +46,20 @@ pub async fn seal(k: &Kernel, tenant: Uuid, request: Uuid) -> Result<bool> {
     let trail = event::list(&mut tx, tenant, request).await?;
     let settings = settings::load(k, &sys, &mut tx).await?;
     let sender = notice::sender_of(&mut tx, tenant, &doc).await?;
+    // The workspace's seal key (made now if this is the first seal), unless it chose none.
+    let digital = match crate::seal_key::load(k, &mut tx, tenant).await {
+        Ok(v) => v,
+        Err(e) => {
+            tx.rollback().await?;
+            failed(k, &sys, &doc, &e).await;
+            return Err(e);
+        }
+    };
     tx.commit().await?;
     // An old Completed request keeps the moment it completed.
     let completed_at = if legacy(&doc) { time(&doc, "completed_at").unwrap_or_else(now) } else { now() };
     let built = if ready(&doc) {
-        build(k, &sys, &doc, &trail, &settings, sender, completed_at).await
+        build(k, &sys, &doc, &trail, &settings, sender, completed_at, digital).await
     } else {
         Err(Error::invalid("the request is Completed without every signature; a person must look at it"))
     };
@@ -81,6 +90,14 @@ pub async fn seal(k: &Kernel, tenant: Uuid, request: Uuid) -> Result<bool> {
     }
 }
 
+/// The audit trail as the file carries it (`audit-trail.json`): every event, exactly as chained.
+fn trail_json(trail: &[event::Row]) -> Value {
+    json!({"events": trail.iter().map(|e| json!({
+        "seq": e.seq, "event": e.event, "occurred_at": ts(e.occurred_at), "role": e.role, "signer_name": e.signer_name, "signer_email": e.signer_email,
+        "actor": e.actor, "ip_hash": e.ip_hash, "user_agent": e.user_agent, "details": e.details, "prev_hash": e.prev_hash, "event_hash": e.event_hash,
+    })).collect::<Vec<_>>()})
+}
+
 /// What sealing stored: the main document's sealed PDF with the certificate, and each further document signed.
 struct Built {
     file: Uuid,
@@ -108,6 +125,7 @@ async fn build(
     settings: &settings::Settings,
     sender: Option<(String, String)>,
     completed_at: DateTime<Utc>,
+    digital: Option<crate::seal_key::SealKey>,
 ) -> Result<Built> {
     let docs = document::documents(doc);
     let main = docs.iter().find(|d| d.n == 1).ok_or_else(|| Error::invalid("the request has no document"))?;
@@ -141,12 +159,31 @@ async fn build(
     let original = read(main).await?;
     let marks = stamps(doc, 1).map_err(Error::invalid)?;
     let more = extra.iter().map(|e| (e.n, e.name.clone(), e.original_sha.clone(), e.sha.clone())).collect();
-    let cert = Certificate::new(doc, trail, settings, sender, completed_at, more);
+    let note = match &digital {
+        Some(d) => Some(SealNote { subject: d.subject(), certificate_sha256: d.certificate_sha256()?, stamped: settings.timestamp_connection.is_some() }),
+        None => None,
+    };
+    let cert = Certificate::new(doc, trail, settings, sender, completed_at, more, note);
     let footer = cert.footer.clone();
-    let sealed = tokio::task::spawn_blocking(move || pdf::seal(&original, &marks, &footer, &|len, sha| cert.paras(len, sha)))
+    let mut sealed = tokio::task::spawn_blocking(move || pdf::seal(&original, &marks, &footer, &|len, sha| cert.paras(len, sha)))
         .await
         .map_err(|_| Error::internal("sealing the PDF failed"))?
         .map_err(Error::invalid)?;
+    // The digital seal, the last revision: the workspace's signature over the whole file, the audit trail embedded, and
+    // (outside any transaction) the time-stamping authority's stamp of the signature when the workspace uses one.
+    if let Some(digital) = digital {
+        let json = serde_json::to_vec(&trail_json(trail)).map_err(|e| Error::internal(e.to_string()))?;
+        let bytes = std::mem::take(&mut sealed.bytes);
+        let begun = tokio::task::spawn_blocking(move || crate::pades::begin(&bytes, &digital, &json, completed_at))
+            .await
+            .map_err(|_| Error::internal("sealing the PDF failed"))?
+            .map_err(Error::invalid)?;
+        let token = match &settings.timestamp_connection {
+            Some(connection) => Some(crate::tsa::stamp(k, sys, connection, &crate::tsa::imprint_of(begun.signature())).await?.0),
+            None => None,
+        };
+        sealed.bytes = begun.finish(token.as_deref()).map_err(Error::invalid)?;
+    }
     let title: String = s(doc, "title").unwrap_or("document").chars().filter(|c| c.is_alphanumeric() || " -_.,()".contains(*c)).take(100).collect();
     let name = format!("{} - signed.pdf", if title.trim().is_empty() { s(doc, "number").unwrap_or("document") } else { title.trim() });
     let file = store(name, sealed.bytes.clone()).await?;
@@ -241,9 +278,24 @@ async fn failed(k: &Kernel, sys: &Ctx, doc: &Doc, e: &Error) {
     tracing::warn!(tenant = %sys.tenant, request = ?s(doc, "id"), "sealing failed: {e}");
 }
 
+/// What the workspace's seal says of itself on the certificate page.
+pub struct SealNote {
+    pub subject: String,
+    pub certificate_sha256: String,
+    pub stamped: bool,
+}
+
 /// The kind of signature every document sealed here carries (DC-43): what it is and what it is not.
-pub const KIND: &str = "Simple electronic signature with an audit trail. Not an advanced or qualified electronic signature, and not a \
-                        PAdES digital signature: no signing certificate, signature device or timestamp authority was used.";
+pub fn kind(seal: Option<&SealNote>) -> String {
+    match seal {
+        None => "Simple electronic signature with an audit trail. Not an advanced or qualified electronic signature, and not a PAdES digital \
+                 signature: no signing certificate, signature device or timestamp authority was used."
+            .into(),
+        Some(_) => "Simple electronic signature with an audit trail, sealed digitally by the workspace's own key (a PAdES signature of the whole file). The \
+                    seal shows the file is unchanged since it was sealed; it is not an advanced or qualified electronic signature of any signer."
+            .into(),
+    }
+}
 
 /// What each field shows on the sealed pages.
 pub fn stamps(doc: &Doc, document_no: usize) -> std::result::Result<Vec<Stamp>, String> {
@@ -294,6 +346,8 @@ struct Certificate {
     attached: Vec<Vec<String>>,
     /// The further documents: `(n, name, original SHA-256, signed SHA-256)`.
     more: Vec<(usize, String, String, String)>,
+    /// Whether the file carries the workspace's digital seal.
+    sealed: bool,
     events: Vec<String>,
     footer: String,
 }
@@ -306,6 +360,7 @@ impl Certificate {
         sender: Option<(String, String)>,
         completed_at: DateTime<Utc>,
         more: Vec<(usize, String, String, String)>,
+        digital: Option<SealNote>,
     ) -> Certificate {
         let when = |key: &str| time(doc, key).map(human).unwrap_or_default();
         let number = s(doc, "number").unwrap_or_default().to_string();
@@ -326,7 +381,18 @@ impl Certificate {
             head.push(("Linked record".into(), format!("{e} {r}")));
         }
         // What kind of signature this is, in plain words: nobody should take it for more than it is.
-        head.push(("Kind of signature".into(), KIND.into()));
+        head.push(("Kind of signature".into(), kind(digital.as_ref())));
+        if let Some(d) = &digital {
+            head.push((
+                "Digital seal".into(),
+                format!(
+                    "Sealed with the workspace's key: {} · certificate SHA-256 {} · {}",
+                    d.subject,
+                    d.certificate_sha256,
+                    if d.stamped { "time-stamped by a time-stamping authority" } else { "not time-stamped" }
+                ),
+            ));
+        }
         if let Some(c) = &settings.consent_text {
             head.push(("Signers agreed to".into(), c.clone()));
         }
@@ -412,6 +478,7 @@ impl Certificate {
             signers,
             attached,
             more,
+            sealed: digital.is_some(),
             events,
             footer: format!("{number} · {title}"),
         }
@@ -460,10 +527,17 @@ impl Certificate {
         p.push(Para::new("About this certificate", 11.0).before(14.0));
         p.push(
             Para::new(
-                "Each signer opened the document through a personal link sent to their email address (and entered an access code where noted), \
-                 confirmed that they agree to sign electronically, and signed. The signed pages above and this record of who signed, when and from \
-                 which device (addresses kept as salted hashes) form an electronic signature with an audit trail. It is not a PAdES digital \
-                 signature: the document's integrity is shown by the SHA-256 values above, which Ferrum Sign recomputes when the request is verified.",
+                format!(
+                    "Each signer opened the document through a personal link sent to their email address (and entered an access code where noted), \
+                     confirmed that they agree to sign electronically, and signed. The signed pages above and this record of who signed, when and from \
+                     which device (addresses kept as salted hashes) form an electronic signature with an audit trail. {} The document's integrity is \
+                     shown by the SHA-256 values above, which Ferrum Sign recomputes when the request is verified.",
+                    if self.sealed {
+                        "The file as a whole then carries the workspace's digital seal (a PAdES signature that allows no further change), and the audit trail as an attachment."
+                    } else {
+                        "It is not a PAdES digital signature."
+                    }
+                ),
                 8.0,
             )
             .muted()
@@ -485,6 +559,7 @@ mod tests {
             reminder_every_days: 3,
             max_reminders: 3,
             bulk_per_day: 2000,
+            timestamp_connection: None,
             brand: None,
             consent_text: consent.map(str::to_string),
         }
@@ -495,8 +570,8 @@ mod tests {
     fn the_certificate_prints_a_custom_consent_only() {
         let doc: Doc = serde_json::from_value(json!({"number": "SIG-1", "title": "T"})).unwrap();
         let line = |c: &Certificate| c.head.iter().find(|(k, _)| k == "Signers agreed to").map(|(_, v)| v.clone());
-        assert_eq!(line(&Certificate::new(&doc, &[], &settings(Some("I accept Acme's terms.")), None, now(), vec![])).as_deref(), Some("I accept Acme's terms."));
-        assert_eq!(line(&Certificate::new(&doc, &[], &settings(None), None, now(), vec![])), None);
+        assert_eq!(line(&Certificate::new(&doc, &[], &settings(Some("I accept Acme's terms.")), None, now(), vec![], None)).as_deref(), Some("I accept Acme's terms."));
+        assert_eq!(line(&Certificate::new(&doc, &[], &settings(None), None, now(), vec![], None)), None);
     }
 
     fn request(fields: Value) -> Doc {
@@ -520,7 +595,7 @@ mod tests {
         assert_eq!(stamps.len(), 3, "the attachment has no stamp");
         assert!(matches!(stamps[0].mark, Mark::Check) && (stamps[0].x, stamps[0].width) == (60.0, 14.0), "the chosen box carries the tick");
         assert!(matches!(&stamps[1].mark, Mark::Text(t) if t == "Pro") && matches!(&stamps[2].mark, Mark::Text(t) if t == "7"));
-        let cert = Certificate::new(&doc, &[], &settings(None), None, now(), vec![]);
+        let cert = Certificate::new(&doc, &[], &settings(None), None, now(), vec![], None);
         assert_eq!(cert.attached, vec![vec!["ID card: id.png · 42 bytes · SHA-256 abc123".to_string()]]);
         let none = request(json!([{"id": "r", "role": "Client", "field_type": "Radio", "page": 1, "x": 10, "y": 10, "width": 100, "height": 14,
             "options": ["Red"], "option_boxes": [[10, 10, 14, 14]]}]));

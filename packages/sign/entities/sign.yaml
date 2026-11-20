@@ -8,6 +8,10 @@
     - {name: link_expiry_days, type: int, default: 30, min: 1, max: 365, description: "Requests without an expiry date close this many days after they are sent; their signing links stop working then"}
     - {name: reminder_every_days, type: int, default: 3, min: 0, max: 60, description: "Signers whose turn it is are reminded after this many days without signing, then at the same interval; 0 = no automatic reminders"}
     - {name: max_reminders, type: int, default: 3, min: 0, max: 20, description: "Automatic reminders per signer at most"}
+    - {name: seal, type: select, options: [Workspace Key, None], default: Workspace Key, description: "What digitally seals every finished document: the workspace's own key (made at the first seal, kept in the vault), or nothing. A seal key and certificate from a certificate authority, set below, replace the made ones"}
+    - {name: seal_certificate, type: text, max_length: 20000, description: "PEM: the seal's certificate and its chain, the seal's own first. Set together with the key below; when neither is set, a self-signed one is made"}
+    - {name: seal_key, type: secret, hidden: true, description: "The seal's private key, PKCS#8 PEM, on curve P-256 or P-384 (RSA keys are not accepted). Left empty, one is made"}
+    - {name: timestamp_connection, type: data, max_length: 63, description: "The name of a time-stamping authority's connection (RFC 3161, a copy of the Sign Timestamp template): every seal then carries its time stamp"}
     - {name: bulk_per_day, type: int, default: 2000, min: 1, max: 100000, description: "Requests that bulk sends may make in 24 hours; sending pauses at the limit and goes on when room is free"}
     - {name: brand, type: link, to: Brand, description: "The brand signers see on the signing page (empty: the address's or the workspace's own)"}
     - {name: consent_text, type: text, max_length: 1000, description: "What signers agree to before they sign, in your own words (empty: Sign's sentence, in the signer's language); printed on the certificate"}
