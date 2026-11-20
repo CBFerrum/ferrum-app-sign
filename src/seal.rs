@@ -484,6 +484,7 @@ mod tests {
             link_expiry_days: 30,
             reminder_every_days: 3,
             max_reminders: 3,
+            bulk_per_day: 2000,
             brand: None,
             consent_text: consent.map(str::to_string),
         }

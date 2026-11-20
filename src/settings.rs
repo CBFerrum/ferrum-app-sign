@@ -15,6 +15,8 @@ pub struct Settings {
     pub link_expiry_days: i64,
     pub reminder_every_days: i64,
     pub max_reminders: i64,
+    /// Requests that bulk sends may make in 24 hours.
+    pub bulk_per_day: i64,
     /// The brand of the signing page (`Brand`), when one is chosen.
     pub brand: Option<Uuid>,
     /// What signers agree to, in the workspace's own words; none: Sign's sentence.
@@ -30,15 +32,15 @@ fn base(url: Option<String>) -> Option<String> {
 /// the operator's link host when there is one (`/go/{workspace}/p`), so a link keeps working when the workspace's address
 /// changes, else the workspace's own address.
 pub async fn load(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<Settings> {
-    type Row = (Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>, Option<Uuid>, Option<String>);
+    type Row = (Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<Uuid>, Option<String>);
     let row: Option<Row> = sqlx::query_as(
-        "select sender_name, public_url, link_expiry_days, reminder_every_days, max_reminders, brand, consent_text from e_sign_settings \
+        "select sender_name, public_url, link_expiry_days, reminder_every_days, max_reminders, bulk_per_day, brand, consent_text from e_sign_settings \
          where tenant_id = $1 limit 1",
     )
     .bind(ctx.tenant)
     .fetch_optional(&mut **tx)
     .await?;
-    let (sender, url, expiry, every, max, brand, consent_text) = row.unwrap_or_default();
+    let (sender, url, expiry, every, max, bulk, brand, consent_text) = row.unwrap_or_default();
     let mut public_url = base(url);
     if public_url.is_none() {
         // With nothing after it: what comes before the paths Sign adds (`/api/site/…`, which every host of the workspace
@@ -55,6 +57,7 @@ pub async fn load(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<Settings> {
         link_expiry_days: expiry.unwrap_or(30).clamp(1, 365),
         reminder_every_days: every.unwrap_or(3).clamp(0, 60),
         max_reminders: max.unwrap_or(3).clamp(0, 20),
+        bulk_per_day: bulk.unwrap_or(2000).clamp(1, 100_000),
         brand,
         consent_text: consent_text.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
     })

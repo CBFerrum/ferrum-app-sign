@@ -9,7 +9,7 @@ modules:
     label: Sign
     icon: file-signature
     order: 47
-    items: [SignRequest, SignTemplate, SignEvent, SignSettings, report:sign_requests_by_status, report:sign_completion_time, report:sign_pending_signatures]
+    items: [SignRequest, SignTemplate, SignBulkSend, SignEvent, SignSettings, report:sign_requests_by_status, report:sign_completion_time, report:sign_pending_signatures]
 
 roles:
   - name: Sign User
@@ -19,6 +19,7 @@ roles:
       - {entity: SignEvent, read: true, if_owner: true}
       - {entity: SignTemplate, read: true}
       - {entity: SignSettings, read: true}
+      - {entity: SignBulkSend, read: true, write: true, create: true, if_owner: true}
   - name: Sign Manager
     description: Every sign request and audit trail, templates and Sign Settings (including rotating the signing key).
     permissions:
@@ -26,9 +27,11 @@ roles:
       - {entity: SignEvent, read: true, export: true}
       - {entity: SignTemplate, read: true, write: true, create: true, delete: true, export: true, import: true}
       - {entity: SignSettings, read: true, write: true, create: true}
+      - {entity: SignBulkSend, read: true, write: true, create: true, delete: true}
 personal_data:
   - {entity: SignEvent, match: signer_email, retain: "Evidence of the signature: erasing it would undo what was signed"}
   - {entity: SignRequest, match: sender_email, retain: "Evidence of the signature: erasing it would undo what was signed"}
+  - {entity: SignBulkSend, match: sender_email, retain: "The record of a bulk send; its recipients' names and addresses are cleared as each request is made"}
 handover:
   - {entity: SignRequest, field: sender_email, where: {status: [Draft, Sent, In Progress]}}
 

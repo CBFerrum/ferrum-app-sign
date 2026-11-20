@@ -26,6 +26,7 @@ pub async fn run(k: &Kernel, tenant: Uuid) -> Result<()> {
         ("sending", crate::envelope::send_pending(k, &ctx).await),
         ("expiry", expire(k, &ctx).await),
         ("reminders", remind(k, &ctx).await),
+        ("bulk sending", crate::bulk::send_due(k, &ctx).await),
         ("sealing", reseal(k, &ctx).await),
         ("seal check", check_seals(k, &ctx).await),
     ];

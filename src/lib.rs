@@ -12,6 +12,7 @@
 //! * Links and copies are emailed with the workspace's own wording (message templates) through the server's mailer;
 //!   without one, actions return copyable links and people get in-app notifications.
 
+mod bulk;
 mod document;
 mod envelope;
 mod event;
@@ -57,6 +58,7 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("SignSettings", Arc::new(settings::SettingsHook))
         .register("SignTemplate", Arc::new(template::TemplateHook))
         .register("SignRequest", Arc::new(request::RequestHook))
+        .register("SignBulkSend", Arc::new(bulk::BulkHook))
         .register("SignEvent", Arc::new(event::EventHook))
         .add_site("sign", site);
 }

@@ -2275,3 +2275,96 @@ async fn embedding() {
     assert_eq!(t.k.embedders(acme.id, "sign/s").await.unwrap(), vec!["https://only.example.net".to_string()], "a refused call changes nothing");
     refused(allow(&asha, "https://www.example.com").await, "forbidden");
 }
+
+#[test]
+fn a_bulk_send_makes_one_request_per_recipient() {
+    run(bulk());
+}
+
+/// S11-G7: a bulk send is checked whole at `start`, then sent by upkeep a row at a time, each row once however many
+/// upkeeps run together (the bulk's and the row's locks, the request and the row's mark in one transaction); a row that
+/// fails is recorded and the others go on; the daily limit pauses sending; people are forgotten once their request is made
+/// (and a failed row's after a month); cancelling forgets the rest.
+async fn bulk() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let ravi = t.user(&acme, "ravi@acme.test", "Ravi Kumar", &["Sign User"]).await;
+    let pdf = contract_pdf("Bulk");
+    let template = {
+        let draft = json!({"template_name": "Welcome", "title": "Welcome pack", "document": t.upload(&mira, "w.pdf", &pdf).await,
+            "roles": [{"role": "Client", "signing_order": 1}], "fields": [field("Client", "Signature", "S", 1, 72, 600, 200, 50)]});
+        uid(&t.k.insert(&mira, "SignTemplate", obj(draft)).await.unwrap())
+    };
+    let table = ferrum_kernel::ddl::q(&acme.admin.schema.entity("SignBulkSend").unwrap().children["recipients"].table);
+    let person = |i: usize| json!({"Client": {"name": format!("Person {i}"), "email": format!("p{i}@client.test")}}).to_string();
+    let bulk_of = |who: &Ctx, rows: Vec<String>| {
+        let (k, who) = (t.k.clone(), who.clone());
+        async move {
+            let recipients: Vec<Value> = rows.into_iter().map(|s| json!({"signers": s})).collect();
+            uid(&k.insert(&who, "SignBulkSend", obj(json!({"title": "Welcome", "template": template.to_string(), "recipients": recipients}))).await.unwrap())
+        }
+    };
+    let start = |who: &Ctx, id: Uuid| {
+        let (k, who) = (t.k.clone(), who.clone());
+        async move { k.run_action(&who, "SignBulkSend", id, "start", json!({})).await }
+    };
+    let made = |bulk: Uuid| t.scalar::<i64>(&acme, "select count(*) from e_sign_request where tenant_id = $1 and bulk_send = $2", bulk);
+
+    // Checked whole at start: a role the template lacks, an address that is no address; nothing starts.
+    let wrong = bulk_of(&asha, vec![person(1), json!({"Boss": {"name": "B", "email": "b@x.test"}}).to_string()]).await;
+    assert!(refused(start(&asha, wrong).await, "invalid").contains("no role"));
+    let wrong_mail = bulk_of(&asha, vec![json!({"Client": {"name": "B", "email": "not-an-address"}}).to_string()]).await;
+    assert!(refused(start(&asha, wrong_mail).await, "invalid").contains("email address"));
+    assert_eq!(t.get(&asha, "SignBulkSend", wrong).await["status"], json!("Draft"));
+
+    // Five recipients; one row is spoiled after it was checked, as a failure at sending would be.
+    let id = bulk_of(&asha, (1..=5).map(person).collect()).await;
+    assert!(start(&ravi, id).await.is_err(), "another Sign User cannot start it");
+    assert!(t.list(&ravi, "SignBulkSend", json!({})).await.is_empty(), "a Sign User sees only their own bulk sends");
+    let started = start(&asha, id).await.unwrap();
+    assert_eq!((started["status"].clone(), started["rows"].clone()), (json!("Sending"), json!(5)));
+    t.sql(&acme, &format!("update {table} set signers = 'not json' where tenant_id = $1 and parent_id = $2 and row_no = 3"), id).await.unwrap();
+
+    // Two upkeeps at the same moment: each row is made once.
+    let (a, b) = tokio::join!(ferrum_app_sign::maintenance(&t.k, acme.id), ferrum_app_sign::maintenance(&t.k, acme.id));
+    a.expect("upkeep");
+    b.expect("upkeep");
+    assert_eq!(made(id).await, 4, "four requests, one per recipient that could be made");
+    let b = t.get(&asha, "SignBulkSend", id).await;
+    assert_eq!((b["status"].clone(), b["sent"].clone(), b["failed"].clone()), (json!("Done With Failures"), json!(4), json!(1)));
+    let rows = b["recipients"].as_array().unwrap();
+    assert_eq!(rows.iter().map(|r| r["status"].as_str().unwrap()).collect::<Vec<_>>(), vec!["Sent", "Sent", "Failed", "Sent", "Sent"]);
+    assert!(rows[2]["error"].as_str().unwrap().contains("JSON"), "the reason is kept: {}", rows[2]["error"]);
+    assert!(rows.iter().filter(|r| r["status"] == json!("Sent")).all(|r| r["signers"].is_null() && r["request"].is_string()), "sent rows forget their people");
+    assert!(rows[2]["signers"].is_string(), "a failed row keeps its people to be fixed");
+    let first = t.get(&asha, "SignRequest", rows[0]["request"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!((first["sender_email"].clone(), first["status"].clone(), first["title"].clone()), (json!("asha@acme.test"), json!("Sent"), json!("Welcome")));
+    // A failed row's people are forgotten a month after the bulk send last changed.
+    t.sql(&acme, "update e_sign_bulk_send set updated_at = now() - interval '31 days' where tenant_id = $1 and id = $2", id).await.unwrap();
+    t.maintenance(&acme).await;
+    assert!(t.get(&asha, "SignBulkSend", id).await["recipients"][2]["signers"].is_null());
+
+    // The daily limit pauses sending, and room made later lets it go on.
+    let settings = uid(&t.k.insert(&mira, "SignSettings", obj(json!({"sender_name": "Acme", "bulk_per_day": 2}))).await.unwrap());
+    let capped = bulk_of(&asha, (6..=9).map(person).collect()).await;
+    start(&asha, capped).await.unwrap();
+    t.maintenance(&acme).await;
+    assert_eq!((made(capped).await, t.get(&asha, "SignBulkSend", capped).await["status"].clone()), (0, json!("Sending")), "four were made today: the limit of 2 is reached");
+    t.k.update(&mira, "SignSettings", settings, obj(json!({"bulk_per_day": 6})), None).await.unwrap();
+    t.maintenance(&acme).await;
+    assert_eq!(made(capped).await, 2, "room for two more");
+    t.k.update(&mira, "SignSettings", settings, obj(json!({"bulk_per_day": 100})), None).await.unwrap();
+    t.maintenance(&acme).await;
+    assert_eq!((made(capped).await, t.get(&asha, "SignBulkSend", capped).await["status"].clone()), (4, json!("Done")));
+
+    // Stopping forgets the rows not yet sent and sends no more.
+    let stopped = bulk_of(&asha, (10..=12).map(person).collect()).await;
+    start(&asha, stopped).await.unwrap();
+    t.k.run_action(&asha, "SignBulkSend", stopped, "cancel", json!({})).await.unwrap();
+    t.maintenance(&acme).await;
+    let b = t.get(&asha, "SignBulkSend", stopped).await;
+    assert_eq!((b["status"].clone(), made(stopped).await), (json!("Cancelled"), 0));
+    assert!(b["recipients"].as_array().unwrap().iter().all(|r| r["signers"].is_null() && r["status"] == json!("Waiting")));
+}

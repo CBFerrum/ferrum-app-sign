@@ -8,6 +8,7 @@
     - {name: link_expiry_days, type: int, default: 30, min: 1, max: 365, description: "Requests without an expiry date close this many days after they are sent; their signing links stop working then"}
     - {name: reminder_every_days, type: int, default: 3, min: 0, max: 60, description: "Signers whose turn it is are reminded after this many days without signing, then at the same interval; 0 = no automatic reminders"}
     - {name: max_reminders, type: int, default: 3, min: 0, max: 20, description: "Automatic reminders per signer at most"}
+    - {name: bulk_per_day, type: int, default: 2000, min: 1, max: 100000, description: "Requests that bulk sends may make in 24 hours; sending pauses at the limit and goes on when room is free"}
     - {name: brand, type: link, to: Brand, description: "The brand signers see on the signing page (empty: the address's or the workspace's own)"}
     - {name: consent_text, type: text, max_length: 1000, description: "What signers agree to before they sign, in your own words (empty: Sign's sentence, in the signer's language); printed on the certificate"}
     - {name: signing_key, type: secret, read_only: true, hidden: true, description: "HMAC key that signs signer links and salts IP hashes; created automatically. Rotating it retires every outstanding link"}
@@ -196,11 +197,12 @@
     - {name: void_reason, type: text, read_only: true, no_copy: true}
     - {name: sealed_document, type: attach, read_only: true, no_copy: true, description: "The signed PDF with its audit certificate"}
     - {name: sealed_sha256, type: data, label: Sealed SHA-256, read_only: true, no_copy: true}
+    - {name: bulk_send, type: link, to: SignBulkSend, read_only: true, no_copy: true, on_delete: set_null, in_filter: true, description: "The bulk send that made this request"}
     - {name: more_documents, type: table, of: SignDocument, description: "Documents 2 onwards, signed in the same request (at most 19); fields name the one they are on with Document No"}
     - {name: seal_error, type: text, read_only: true, hidden: true, no_copy: true, description: "Why sealing last failed (it is retried)"}
     - {name: signers, type: table, of: SignRequestSigner}
     - {name: fields, type: table, of: SignField}
-  indexes: [[status, expires_at], [reference_entity, reference_id], [sealed_sha256]]
+  indexes: [[status, expires_at], [reference_entity, reference_id], [sealed_sha256], [bulk_send]]
   actions:
     - name: send
       label: Send for Signature
@@ -302,3 +304,53 @@
   unique: [[request, seq]]
   indexes: [[occurred_at]]
   list: {columns: [occurred_at, request, event, signer_email], sort: created_at desc}
+
+- name: SignBulkRecipient
+  label: Bulk Recipient
+  kind: child
+  fields:
+    - {name: row_no, type: int, required: true, read_only: true, in_list: true}
+    - {name: signers, type: text, max_length: 20000, description: "A JSON object: role → {name, email}, for each role of the template. Cleared once the request is made"}
+    - {name: reference_entity, type: data, max_length: 64, description: "The record this recipient's request is about, e.g. Quotation"}
+    - {name: reference_id, type: data, max_length: 36}
+    - {name: status, type: select, options: [Waiting, Sent, Failed], default: Waiting, read_only: true, no_copy: true, in_list: true}
+    - {name: request, type: link, to: SignRequest, read_only: true, no_copy: true, in_list: true}
+    - {name: error, type: text, read_only: true, no_copy: true}
+
+- name: SignBulkSend
+  label: Bulk Send
+  label_plural: Bulk Sends
+  kind: master
+  module: sign
+  title_field: title
+  owner_fields: [sender_email]
+  description: "One template sent to many recipients, one request each, a few per minute"
+  fields:
+    - {name: title, type: data, required: true, max_length: 200, in_list: true, description: "Title of every request it makes"}
+    - {name: template, type: link, to: SignTemplate, required: true, in_list: true}
+    - {name: message, type: text, max_length: 5000, description: "Message to every recipient"}
+    - {name: expires_on, type: date, description: "Last day to sign, for every request"}
+    - {name: status, type: select, options: [Draft, Sending, Done, Done With Failures, Cancelled], default: Draft, read_only: true, no_copy: true, in_list: true}
+    - {name: sent, type: int, read_only: true, no_copy: true}
+    - {name: failed, type: int, read_only: true, no_copy: true}
+    - {name: sender_email, type: email, read_only: true, no_copy: true}
+    - {name: recipients, type: table, of: SignBulkRecipient}
+  actions:
+    - name: start
+      label: Start Sending
+      permission: write
+      condition: "doc.status == 'Draft'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {status: {type: string, const: Sending}, rows: {type: integer}}}
+        completion: "Sending has started: each recipient gets their own request within minutes, a few every minute"
+    - name: cancel
+      label: Stop
+      permission: write
+      condition: "doc.status == 'Sending'"
+      confirm: "No further requests will be made; those already sent stay. Continue?"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {status: {type: string, const: Cancelled}}}
+        completion: "No further requests are made; those already sent stay, and the people of the rows not yet sent are forgotten"
+  indexes: [[status]]
