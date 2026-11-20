@@ -1,9 +1,9 @@
 //! Sign Settings: sender name, public URL for links, link expiry, reminder cadence and the
 //! signing key (a secret field, rotated by an action).
 
-use crate::{doc_id, s, token};
+use crate::{doc_id, token};
 use async_trait::async_trait;
-use ferrum_kernel::{Ctx, Doc, DocHook, Filter, HookCtx, Kernel, Result, Tx};
+use ferrum_kernel::{Ctx, Doc, DocHook, HookCtx, Kernel, Result, Tx};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -15,30 +15,31 @@ pub struct Settings {
     pub link_expiry_days: i64,
     pub reminder_every_days: i64,
     pub max_reminders: i64,
+    /// The brand of the signing page (`Brand`), when one is chosen.
+    pub brand: Option<Uuid>,
+    /// What signers agree to, in the workspace's own words; none: Sign's sentence.
+    pub consent_text: Option<String>,
 }
 
 fn base(url: Option<String>) -> Option<String> {
     url.map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| u.starts_with("https://") || u.starts_with("http://"))
 }
 
-/// The tenant's settings, with defaults when nobody saved them yet. The public URL falls back to
-/// the Mail app's when Sign has none, then to where the platform sends people outside the workspace, as a signer is: through
+/// The tenant's settings, with defaults when nobody saved them yet. The public URL falls back to where the platform
+/// sends people outside the workspace, as a signer is: through
 /// the operator's link host when there is one (`/go/{workspace}/p`), so a link keeps working when the workspace's address
 /// changes, else the workspace's own address.
 pub async fn load(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<Settings> {
-    type Row = (Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>);
+    type Row = (Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>, Option<Uuid>, Option<String>);
     let row: Option<Row> = sqlx::query_as(
-        "select sender_name, public_url, link_expiry_days, reminder_every_days, max_reminders from e_sign_settings where tenant_id = $1 limit 1",
+        "select sender_name, public_url, link_expiry_days, reminder_every_days, max_reminders, brand, consent_text from e_sign_settings \
+         where tenant_id = $1 limit 1",
     )
     .bind(ctx.tenant)
     .fetch_optional(&mut **tx)
     .await?;
-    let (sender, url, expiry, every, max) = row.unwrap_or_default();
+    let (sender, url, expiry, every, max, brand, consent_text) = row.unwrap_or_default();
     let mut public_url = base(url);
-    if public_url.is_none() && ctx.schema.entity("CommsSettings").is_some() {
-        let comms = k.find_tx(&ferrum_domain::util::sys(ctx), tx, "CommsSettings", &[] as &[Filter], None, 1).await?;
-        public_url = base(comms.first().and_then(|d| s(d, "public_url")).map(str::to_string));
-    }
     if public_url.is_none() {
         // With nothing after it: what comes before the paths Sign adds (`/api/site/…`, which every host of the workspace
         // serves, its portal's too).
@@ -54,6 +55,8 @@ pub async fn load(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<Settings> {
         link_expiry_days: expiry.unwrap_or(30).clamp(1, 365),
         reminder_every_days: every.unwrap_or(3).clamp(0, 60),
         max_reminders: max.unwrap_or(3).clamp(0, 20),
+        brand,
+        consent_text: consent_text.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
     })
 }
 

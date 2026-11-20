@@ -1,19 +1,20 @@
-//! Getting word to people: signers' links and emails — through the Mail app (a `Communication`
-//! record per message, delivered and retried by Mail) when the workspace has it, otherwise through
-//! the server's mailer — and in-app notifications for users when no email can go out.
+//! Getting word to people: signers' links and emails, sent with the workspace's own wording (the package's message
+//! templates `sign.invitation`, `sign.reminder`, `sign.voided`, `sign.completed`, which a workspace edits) through the
+//! platform's messages and the server's mailer, with or without the Mail app; and in-app notifications for users when
+//! no email can go out. A signing link is a secret value of its message: sealed while it waits, a placeholder in the
+//! message log.
 
 use crate::settings::{self, Settings};
 use crate::{doc_id, human, id, s, time, token};
+use ferrum_kernel::messages::{Message, Recipient};
 use ferrum_kernel::{Ctx, Doc, Error, Kernel, Result, Tx};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 /// What a delivery needs: the settings, the workspace slug for links and the signing key.
 pub struct Outbox {
-    /// Emails can go out (Mail app or server mailer).
+    /// Emails can go out: the server has a mailer.
     pub mail: bool,
-    /// They go through the Mail app.
-    via_app: bool,
     /// The sealed PDF can travel with the completion email.
     attach: bool,
     pub settings: Settings,
@@ -27,9 +28,8 @@ impl Outbox {
         let settings = settings::load(k, ctx, tx).await?;
         let key = token::signing_key(k, tx, ctx.tenant).await?;
         let slug = settings::slug(tx, ctx.tenant).await?;
-        let via_app = crate::mail(ctx);
-        let attach = via_app || k.mailer.as_ref().is_some_and(|m| m.can_attach());
-        Ok(Outbox { mail: crate::can_email(k, ctx), via_app, attach, settings, tenant: ctx.tenant, slug, key })
+        let attach = k.mailer.as_ref().is_some_and(|m| m.can_attach());
+        Ok(Outbox { mail: crate::can_email(k), attach, settings, tenant: ctx.tenant, slug, key })
     }
 
     /// The signer's link to the signing page (absolute when the public URL is known).
@@ -60,52 +60,25 @@ impl Outbox {
     /// Emailed links must be absolute.
     pub fn require_url(&self) -> Result<()> {
         if self.mail && self.settings.public_url.is_none() {
-            return Err(Error::invalid("set the Public URL in Sign Settings (or in the Mail app's settings) so emailed signing links work"));
+            return Err(Error::invalid("set the Public URL in Sign Settings so emailed signing links work"));
         }
         Ok(())
     }
 
-    /// Emails a signer their link — an invitation or a reminder — when the workspace has Mail;
-    /// returns whether it was emailed (otherwise the caller hands out the link).
+    /// Emails a signer their link, an invitation or a reminder, when an email can go out; returns whether it was
+    /// emailed (otherwise the caller hands out the link).
     pub async fn invite(&self, k: &Kernel, ctx: &Ctx, tx: &mut Tx, request: &Doc, signer: &Doc, reminder: bool) -> Result<bool> {
         if !self.mail || linked(signer) {
             return Ok(false);
         }
         self.require_url()?;
-        let link = self.link(request, signer)?;
-        let sender = sender_line(tx, ctx.tenant, request, &self.settings).await?;
-        let title = s(request, "title").unwrap_or_default();
-        let number = s(request, "number").unwrap_or_default();
-        let until = time(request, "expires_at").map(human).unwrap_or_default();
-        let code = s(signer, "access_code_hash").is_some();
-        let subject = if reminder { format!("Reminder: please sign \"{title}\"") } else { format!("{}: please sign \"{title}\"", self.settings.sender_name) };
-        let lead = if reminder {
-            format!("{sender} is still waiting for your signature on <strong>{}</strong> ({}).", esc(title), esc(number))
-        } else {
-            format!("{sender} sent you <strong>{}</strong> ({}) to sign.", esc(title), esc(number))
-        };
-        let message = s(request, "message")
-            .map(|m| {
-                format!("<blockquote style=\"margin:12px 0;padding-left:12px;border-left:3px solid #d0d7de\">{}</blockquote>", esc(m).replace('\n', "<br>"))
-            })
-            .unwrap_or_default();
-        let note = format!(
-            "This link is personal: anyone who has it can sign as you, so do not forward it. It works until {until}.{}",
-            if code { " You will also need the access code the sender gave you." } else { "" }
-        );
-        let html = format!(
-            "<p>Hello {},</p><p>{lead}</p>{message}<p><a href=\"{}\" style=\"display:inline-block;padding:10px 18px;background:#1f6feb;color:#fff;border-radius:6px;text-decoration:none\">Review and sign</a></p><p style=\"color:#57606a;font-size:13px\">{}</p>",
-            esc(s(signer, "name").unwrap_or("there")),
-            esc(&link),
-            esc(&note)
-        );
-        let text = format!(
-            "Hello {},\n\n{}\n\n{}Review and sign: {link}\n\n{note}\n",
-            s(signer, "name").unwrap_or("there"),
-            strip_tags(&lead),
-            s(request, "message").map(|m| format!("{m}\n\n")).unwrap_or_default()
-        );
-        email(self.via_app, k, ctx, tx, request, signer, &subject, &html, &text, json!([])).await?;
+        let mut values = self.values(tx, ctx.tenant, request).await?;
+        values.insert("name".into(), json!(s(signer, "name").unwrap_or_default()));
+        values.insert("link".into(), json!(self.link(request, signer)?));
+        values.insert("until".into(), json!(time(request, "expires_at").map(human).unwrap_or_default()));
+        values.insert("access_code".into(), json!(s(signer, "access_code_hash").is_some()));
+        let template = if reminder { REMINDER } else { INVITATION };
+        email(k, ctx, tx, template, request, signer, values, &[], &["link"]).await?;
         Ok(true)
     }
 
@@ -114,41 +87,39 @@ impl Outbox {
         if !self.mail || s(signer, "email").is_none() {
             return Ok(());
         }
-        let sender = sender_line(tx, ctx.tenant, request, &self.settings).await?;
-        let title = s(request, "title").unwrap_or_default();
-        let reason = s(request, "void_reason").map(|r| format!(" Reason: {r}")).unwrap_or_default();
-        let html = format!(
-            "<p>{sender} withdrew <strong>{}</strong> ({}). It can no longer be signed and your link no longer works.{}</p>",
-            esc(title),
-            esc(s(request, "number").unwrap_or_default()),
-            esc(&reason)
-        );
-        let text = format!("{} withdrew \"{title}\". It can no longer be signed.{reason}\n", strip_tags(&sender));
-        email(self.via_app, k, ctx, tx, request, signer, &format!("Withdrawn: \"{title}\""), &html, &text, json!([])).await
+        let values = self.values(tx, ctx.tenant, request).await?;
+        email(k, ctx, tx, VOIDED, request, signer, values, &[], &[]).await
     }
 
-    /// Sends a signer the sealed PDF — only where it can travel with the email.
-    pub async fn completed(&self, k: &Kernel, ctx: &Ctx, tx: &mut Tx, request: &Doc, signer: &Doc, file: &Value) -> Result<()> {
+    /// Sends a signer the sealed PDF, only where it can travel with the email.
+    pub async fn completed(&self, k: &Kernel, ctx: &Ctx, tx: &mut Tx, request: &Doc, signer: &Doc, file: Uuid) -> Result<()> {
         if !self.mail || !self.attach || s(signer, "email").is_none() {
             return Ok(());
         }
-        let title = s(request, "title").unwrap_or_default();
-        let sha = s(request, "sealed_sha256").unwrap_or_default();
-        let html = format!(
-            "<p>Everyone has signed <strong>{}</strong> ({}). The signed PDF with its audit certificate is attached.</p><p style=\"color:#57606a;font-size:13px\">SHA-256 of the attached file: <code>{sha}</code></p>",
-            esc(title),
-            esc(s(request, "number").unwrap_or_default())
-        );
-        let text = format!("Everyone has signed \"{title}\". The signed PDF with its audit certificate is attached.\nSHA-256: {sha}\n");
-        email(self.via_app, k, ctx, tx, request, signer, &format!("Signed: \"{title}\""), &html, &text, json!([file])).await
+        let values = self.values(tx, ctx.tenant, request).await?;
+        email(k, ctx, tx, COMPLETED, request, signer, values, &[file], &[]).await
+    }
+
+    /// What every message of a request reads besides the request: the organization and the sender.
+    async fn values(&self, tx: &mut Tx, tenant: Uuid, request: &Doc) -> Result<Map<String, Value>> {
+        let mut v = Map::new();
+        v.insert("organization".into(), json!(self.settings.sender_name));
+        v.insert("sender".into(), json!(sender_line(tx, tenant, request, &self.settings).await?));
+        Ok(v)
     }
 }
 
-/// `Asha Rao (asha@acme.test) of Acme Corp`, HTML-escaped.
+/// The package's message templates (`packages/sign/package.yaml`).
+const INVITATION: &str = "sign.invitation";
+const REMINDER: &str = "sign.reminder";
+const VOIDED: &str = "sign.voided";
+const COMPLETED: &str = "sign.completed";
+
+/// `Asha Rao (asha@acme.test) of Acme Corp`; the template escapes it.
 async fn sender_line(tx: &mut Tx, tenant: Uuid, request: &Doc, settings: &Settings) -> Result<String> {
     Ok(match sender_of(tx, tenant, request).await? {
-        Some((name, email)) => format!("{} ({}) of {}", esc(&name), esc(&email), esc(&settings.sender_name)),
-        None => esc(&settings.sender_name),
+        Some((name, email)) => format!("{name} ({email}) of {}", settings.sender_name),
+        None => settings.sender_name.clone(),
     })
 }
 
@@ -158,43 +129,32 @@ pub async fn sender_of(tx: &mut Tx, tenant: Uuid, request: &Doc) -> Result<Optio
     Ok(sqlx::query_as("select full_name, email::text from app_user where tenant_id = $1 and id = $2").bind(tenant).bind(user).fetch_optional(&mut **tx).await?)
 }
 
-/// One email: through Mail, on the request's timeline, or through the server's mailer.
+/// One email from a template, about the request, in the caller's transaction (it goes once that commits).
 #[allow(clippy::too_many_arguments)]
 async fn email(
-    via_app: bool,
     k: &Kernel,
     ctx: &Ctx,
     tx: &mut Tx,
+    template: &str,
     request: &Doc,
     to: &Doc,
-    subject: &str,
-    html: &str,
-    text: &str,
-    attachments: Value,
+    values: Map<String, Value>,
+    attachments: &[Uuid],
+    secret: &[&str],
 ) -> Result<()> {
     let address = s(to, "email").ok_or_else(|| Error::internal("signer without email"))?;
-    if !via_app {
-        let files: Vec<Uuid> = attachments.as_array().map(|a| a.iter().filter_map(|f| f.get("id")?.as_str()?.parse().ok()).collect()).unwrap_or_default();
-        let subject: String = subject.replace(['\r', '\n'], " ").chars().take(300).collect();
-        return k.queue_mail_with(tx, ctx.tenant, address, &subject, html, &files).await;
-    }
-    let name: String = s(to, "name").unwrap_or_default().chars().filter(|c| !c.is_control() && !"\"\\<>".contains(*c)).collect();
-    let recipient = if name.trim().is_empty() { address.to_string() } else { format!("\"{}\" <{address}>", name.trim()) };
-    let mut doc = Doc::new();
-    for (key, v) in [
-        ("channel", json!("Email")),
-        ("direction", json!("Sent")),
-        ("recipients", json!(recipient)),
-        ("subject", json!(subject.chars().take(990).collect::<String>())),
-        ("content", json!(html)),
-        ("text_content", json!(text)),
-        ("reference_entity", json!("SignRequest")),
-        ("reference_id", json!(doc_id(request)?)),
-        ("attachments", attachments),
-    ] {
-        doc.insert(key.into(), v);
-    }
-    k.insert_tx(ctx, tx, "Communication", doc).await.map(|_| ())
+    let m = Message {
+        template: template.into(),
+        entity: Some("SignRequest".into()),
+        record: Some(doc_id(request)?),
+        to: vec![Recipient::address(address)],
+        channels: vec!["email".into()],
+        values,
+        attachments: attachments.to_vec(),
+        secret: secret.iter().map(|v| v.to_string()).collect(),
+        ..Default::default()
+    };
+    ferrum_kernel::messages::send(k, tx, ctx, &m).await.map(|_| ())
 }
 
 /// An in-app notification to the request's sender; for a request no person made (a configured step's, the system's),
@@ -264,34 +224,5 @@ pub fn given(signer: &Doc, emailed: bool, again: bool) -> &'static str {
         (false, true, true) => "Emailed the signing link again",
         (false, false, false) => "Signing link given to the sender",
         (false, false, true) => "Signing link given to the sender again",
-    }
-}
-
-pub fn esc(v: &str) -> String {
-    v.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
-}
-
-fn strip_tags(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut inside = false;
-    for c in html.chars() {
-        match c {
-            '<' => inside = true,
-            '>' => inside = false,
-            _ if !inside => out.push(c),
-            _ => {}
-        }
-    }
-    out.replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn escaping() {
-        assert_eq!(esc("<a href=\"x\">'&"), "&lt;a href=&quot;x&quot;&gt;&#39;&amp;");
-        assert_eq!(strip_tags("Asha (a@x.test) sent you <strong>NDA &amp; terms</strong>."), "Asha (a@x.test) sent you NDA & terms.");
     }
 }

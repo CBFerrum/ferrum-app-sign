@@ -22,8 +22,6 @@ pub const LOCKOUT_MINUTES: i64 = 15;
 pub const MAX_SIGN_BODY: usize = 1024 * 1024;
 const MAX_TEXT: usize = 500;
 
-pub const CONSENT: &str = "I agree to sign this document electronically and that my electronic signature is as valid as my handwritten one.";
-
 /// Who is calling: the address (hashed before it is kept), the browser, the access code, and the session a signer
 /// whose link is not mailed opens their page with (`token::session_token`).
 pub struct Client {
@@ -257,7 +255,9 @@ pub async fn view(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Resu
     let gate = with_link(k, tenant, token_str, c, |o, mut tx, sys| async move {
         let settings = crate::settings::load(k, &sys, &mut tx).await?;
         let sender = notice::sender_of(&mut tx, tenant, &o.request).await?;
+        let slug = crate::settings::slug(&mut tx, tenant).await?;
         tx.commit().await?;
+        let brand = k.public_brand(tenant, settings.brand, None).await?.map(|b| b.boot(&slug));
         let r = &o.request;
         let mine = o.my_fields();
         let needs = |t: &str| mine.iter().any(|f| s(f, "field_type") == Some(t));
@@ -275,7 +275,9 @@ pub async fn view(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Resu
             "needs": {"signature": needs("Signature"), "initials": needs("Initials")},
             "identity": {"code": request::code_channel(r, &o.signer), "verified": o.signer.get("identity_verified_at").is_some_and(|v| !v.is_null())},
             "can_reassign": crate::b(r, "allow_reassign"),
-            "consent": CONSENT,
+            // The workspace's own words, or null: the page shows Sign's sentence in the signer's language.
+            "consent": settings.consent_text,
+            "brand": brand,
         }))
     })
     .await?;

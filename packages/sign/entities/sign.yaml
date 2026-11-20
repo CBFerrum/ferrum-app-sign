@@ -8,6 +8,8 @@
     - {name: link_expiry_days, type: int, default: 30, min: 1, max: 365, description: "Requests without an expiry date close this many days after they are sent; their signing links stop working then"}
     - {name: reminder_every_days, type: int, default: 3, min: 0, max: 60, description: "Signers whose turn it is are reminded after this many days without signing, then at the same interval; 0 = no automatic reminders"}
     - {name: max_reminders, type: int, default: 3, min: 0, max: 20, description: "Automatic reminders per signer at most"}
+    - {name: brand, type: link, to: Brand, description: "The brand signers see on the signing page (empty: the address's or the workspace's own)"}
+    - {name: consent_text, type: text, max_length: 1000, description: "What signers agree to before they sign, in your own words (empty: Sign's sentence, in the signer's language); printed on the certificate"}
     - {name: signing_key, type: secret, read_only: true, hidden: true, description: "HMAC key that signs signer links and salts IP hashes; created automatically. Rotating it retires every outstanding link"}
   actions:
     - name: rotate_signing_key

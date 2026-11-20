@@ -257,7 +257,7 @@ label.check{display:flex;gap:8px;align-items:flex-start;font-weight:400}ul{paddi
       card(h('h2', {text: 'Document'}), frame, h('p', {class: 'muted'}, download, ' · SHA-256 ' + req.document_sha256)),
       card(h('h2', {text: 'What you fill in'}), list, form, signature ? signature.el : null,
         initials ? h('label', {text: 'Your initials'}) : null, initials,
-        h('label', {class: 'check'}, consent, h('span', {text: d.consent})), error, h('div', {class: 'row'}, signBtn, declineBtn)));
+        h('label', {class: 'check'}, consent, h('span', {text: d.consent || 'I agree to sign this document electronically and that my electronic signature is as valid as my handwritten one.'})), error, h('div', {class: 'row'}, signBtn, declineBtn)));
     signBtn.onclick = async () => {
       error.textContent = '';
       if (!consent.checked) { error.textContent = 'Tick the box to agree to sign electronically.'; return; }

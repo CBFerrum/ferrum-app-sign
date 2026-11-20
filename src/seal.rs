@@ -64,7 +64,7 @@ pub async fn seal(k: &Kernel, tenant: Uuid, request: Uuid) -> Result<bool> {
     let sha = hex::encode(Sha256::digest(&sealed.bytes));
     let details =
         format!("Sealed PDF SHA-256 {sha} ({} pages); signed document SHA-256 {} (its first {} bytes)", sealed.pages, sealed.signed_sha256, sealed.signed_len);
-    let done = with_retry(|| complete(k, &sys, request, file, &sha, sealed.bytes.len(), &details, completed_at)).await;
+    let done = with_retry(|| complete(k, &sys, request, file, &sha, &details, completed_at)).await;
     match done {
         Ok(true) => Ok(true),
         Ok(false) => {
@@ -109,7 +109,7 @@ async fn build(
 }
 
 /// Completes the request with the stored sealed PDF, if it is still ready.
-async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, sha: &str, size: usize, details: &str, at: DateTime<Utc>) -> Result<bool> {
+async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, sha: &str, details: &str, at: DateTime<Utc>) -> Result<bool> {
     let mut tx = k.db.tenant_tx(sys.tenant).await?;
     let doc = crate::lock_request(k, sys, &mut tx, request).await?;
     if !ready(&doc) {
@@ -143,13 +143,10 @@ async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, sha: &str, s
         Some(&format!("\"{}\" is complete; the sealed PDF is on the request.", s(&done, "title").unwrap_or_default())),
     )
     .await?;
-    if crate::can_email(k, sys) {
+    if crate::can_email(k) {
         let out = Outbox::load(k, sys, &mut tx).await?;
-        let name: String =
-            sqlx::query_scalar("select file_name from file_object where tenant_id = $1 and id = $2").bind(sys.tenant).bind(file).fetch_one(&mut *tx).await?;
-        let attachment = json!({"id": file, "file_name": name, "content_type": "application/pdf", "size": size, "url": format!("/files/{file}")});
         for sg in rows(&done, "signers") {
-            out.completed(k, sys, &mut tx, &done, &sg, &attachment).await?;
+            out.completed(k, sys, &mut tx, &done, &sg, file).await?;
         }
     }
     tx.commit().await?;
@@ -255,6 +252,9 @@ impl Certificate {
         }
         // What kind of signature this is, in plain words: nobody should take it for more than it is.
         head.push(("Kind of signature".into(), KIND.into()));
+        if let Some(c) = &settings.consent_text {
+            head.push(("Signers agreed to".into(), c.clone()));
+        }
         let signers = rows(doc, "signers")
             .iter()
             .map(|r| {
@@ -361,5 +361,31 @@ impl Certificate {
             .before(2.0),
         );
         p
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(consent: Option<&str>) -> settings::Settings {
+        settings::Settings {
+            sender_name: "Acme".into(),
+            public_url: None,
+            link_expiry_days: 30,
+            reminder_every_days: 3,
+            max_reminders: 3,
+            brand: None,
+            consent_text: consent.map(str::to_string),
+        }
+    }
+
+    /// S11-G4: the sentence signers agreed to is on the certificate when the workspace worded it itself.
+    #[test]
+    fn the_certificate_prints_a_custom_consent_only() {
+        let doc: Doc = serde_json::from_value(json!({"number": "SIG-1", "title": "T"})).unwrap();
+        let line = |c: &Certificate| c.head.iter().find(|(k, _)| k == "Signers agreed to").map(|(_, v)| v.clone());
+        assert_eq!(line(&Certificate::new(&doc, &[], &settings(Some("I accept Acme's terms.")), None, now())).as_deref(), Some("I accept Acme's terms."));
+        assert_eq!(line(&Certificate::new(&doc, &[], &settings(None), None, now())), None);
     }
 }

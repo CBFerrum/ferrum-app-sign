@@ -463,7 +463,7 @@ async fn void(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Value> 
     )
     .await?;
     crate::envelope::ended(hc.tx, ctx, &voided, "Voided").await?;
-    if crate::can_email(k, ctx) {
+    if crate::can_email(k) {
         let out = Outbox::load(k, ctx, hc.tx).await?;
         for sg in rows(&voided, "signers").iter().filter(|r| matches!(s(r, "status"), Some("Sent" | "Viewed" | "Signed"))) {
             out.withdrawn(k, &ectx, hc.tx, &voided, sg).await?;

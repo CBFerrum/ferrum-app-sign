@@ -1815,3 +1815,11 @@ a.btn {
   color: var(--text);
   overflow-wrap: anywhere;
 }
+
+.sg-logo {
+  display: block;
+  max-height: 28px;
+  max-width: 160px;
+  margin-bottom: var(--space-2, 8px);
+  object-fit: contain;
+}

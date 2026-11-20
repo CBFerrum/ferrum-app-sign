@@ -41,7 +41,10 @@ export interface SigningView {
   signer: { role?: string | null; name?: string | null; email?: string | null; status?: string | null };
   fields: SigningField[];
   needs: { signature: boolean; initials: boolean };
-  consent: string;
+  /** The workspace's own sentence, or null: the page words Sign's own. */
+  consent: string | null;
+  /** The brand the signing page carries (`Kernel::public_brand`), when the workspace chose one. */
+  brand?: { name?: string | null; logo?: string | null } | null;
 }
 
 // ───────────────────────── what a link answers ─────────────────────────

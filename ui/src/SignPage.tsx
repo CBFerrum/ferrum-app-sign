@@ -435,6 +435,7 @@ export function Ready({
     <div className="sg-sign">
       <header className="sg-top">
         <div className="sg-top-main">
+          {view.brand?.logo && <img className="sg-logo" src={view.brand.logo} alt={view.brand.name ?? ""} height={28} />}
           <h1 className="sg-title">{isolate(request.title)}</h1>
           <p className="sg-from">
             {sender ? tr("From {sender}", { sender }) : tr("Sent to you for signature")}
@@ -734,7 +735,7 @@ export function Ready({
           {error && <Alert tone="error">{isolate(error)}</Alert>}
           <label className="sg-consent">
             <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
-            <span>{isolate(view.consent)}</span>
+            <span>{isolate(view.consent ?? tr("I agree to sign this document electronically and that my electronic signature is as valid as my handwritten one."))}</span>
           </label>
           {problems.consent && <p className="field-error">{isolate(problems.consent)}</p>}
           <p className="sg-kind">

@@ -211,6 +211,27 @@ struct T {
     sign: ferrum_kernel::vault::Vault,
     /// The handles of the test's own apps (each package of `boot_with`'s, as an app of its name).
     apps: HashMap<String, ferrum_kernel::vault::Vault>,
+    /// The server's mailer, when the test gave one: what it was asked to send.
+    mail: Option<Arc<TestMailer>>,
+}
+
+/// The server's mailer in memory: `(to, subject, html, attached file names)`.
+#[derive(Default)]
+struct TestMailer(Mutex<Vec<(String, String, String, Vec<String>)>>);
+
+#[async_trait::async_trait]
+impl ferrum_kernel::Mailer for TestMailer {
+    async fn send(&self, to: &str, subject: &str, html: &str) -> ferrum_kernel::Result<()> {
+        self.0.lock().unwrap().push((to.into(), subject.into(), html.into(), vec![]));
+        Ok(())
+    }
+    fn can_attach(&self) -> bool {
+        true
+    }
+    async fn send_with(&self, to: &str, subject: &str, html: &str, files: &[ferrum_kernel::MailAttachment]) -> ferrum_kernel::Result<()> {
+        self.0.lock().unwrap().push((to.into(), subject.into(), html.into(), files.iter().map(|f| f.file_name.clone()).collect()));
+        Ok(())
+    }
 }
 
 struct Tenant {
@@ -467,7 +488,6 @@ async fn scenario() {
     ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("app packages"));
-    packages.extend(ferrum_app_comms::packages().expect("mail packages"));
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
@@ -478,15 +498,12 @@ async fn scenario() {
         sign = Some(h.vault());
     });
     hooks.own("sign", &sign_packages);
-    hooks.app("comms", &[], ferrum_app_comms::register);
-    let comms_packages: Vec<String> = ferrum_app_comms::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
-    hooks.own("comms", &comms_packages);
     ferrum_domain::reports::set_sources(ferrum_app_sign::reports().into_iter().map(|r| ("sign".to_string(), r)).collect()).expect("Sign's reports");
     let settings = KernelSettings { pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle"), apps: HashMap::new() };
+    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle"), apps: HashMap::new(), mail: None };
 
     // ───────────── a workspace without Mail, in New York ─────────────
     let acme = t.tenant("acme", &["sign"], "America/New_York").await;
@@ -1193,42 +1210,6 @@ async fn scenario() {
     let other = json!({"title": "Swapped", "document": t.upload(&asha, "x.pdf", &pdf).await, "source_sha256": "00".repeat(32), "send_on_create": true,
         "signers": [{"role": "C", "name": "C", "email": "c@x.test"}]});
     assert!(refused(t.k.insert(&asha, "SignRequest", obj(other)).await, "invalid").contains("not the one generated"));
-
-    // ───────────── a workspace with Mail: links and sealed copies are emailed ─────────────
-    let globex = t.tenant("globex", &["sign", "comms"], "UTC").await;
-    let gina = t.user(&globex, "gina@globex.test", "Gina Ortiz", &["Sign User"]).await;
-    let gdoc = t.upload(&gina, "po.pdf", &pdf).await;
-    let po = t
-        .k
-        .insert(&gina, "SignRequest", obj(json!({"title": "Purchase Order", "document": gdoc, "signers": [{"role": "Supplier", "name": "Sam Supplier", "email": "sam@supplier.test"}], "fields": [field("Supplier", "Signature", "Sign", 1, 72, 600, 200, 50)]})))
-        .await
-        .unwrap();
-    let po_id = uid(&po);
-    assert!(refused(t.k.run_action(&gina, "SignRequest", po_id, "send", json!({})).await, "invalid").contains("Public URL"), "emailed links must be absolute");
-    // The first send created the settings row with the signing key: complete it.
-    let gsettings = t.list(&globex.admin, "SignSettings", json!({})).await;
-    assert_eq!(gsettings.len(), 1);
-    let stored = t.get(&globex.admin, "SignSettings", uid(&gsettings[0])).await;
-    assert_eq!(stored["signing_key"], json!(true), "the key is a secret: reads only say it is set");
-    t.k.update(&globex.admin, "SignSettings", uid(&gsettings[0]), obj(json!({"public_url": "https://erp.globex.test/"})), None).await.unwrap();
-    let sent = t.action(&gina, po_id, "send", json!({})).await;
-    assert_eq!((sent["signers"][0]["emailed"].clone(), sent["signers"][0].get("url").is_none()), (json!(true), true), "emailed, so no link in the answer");
-    let gsys = t.sys(&globex);
-    let mails = t.list(&gsys, "Communication", json!({"reference_entity": "SignRequest", "reference_id": po_id.to_string()})).await;
-    assert_eq!(mails.len(), 1);
-    assert_eq!((mails[0]["status"].clone(), mails[0]["channel"].clone()), (json!("Queued"), json!("Email")));
-    assert!(mails[0]["recipients"].as_str().unwrap().contains("sam@supplier.test"));
-    let content = mails[0]["content"].as_str().unwrap();
-    let start = content.find("https://erp.globex.test/api/site/globex/sign/s/").expect("absolute signing link in the email");
-    let po_token: String = content[start..].trim_start_matches("https://erp.globex.test/api/site/globex/sign/s/").chars().take(43).collect();
-    refused(t.view(&acme, &po_token, None).await, "not found");
-    let (_, done) = t.sign(&globex, &po_token, None, json!({"consent": true, "signature": {"image": drawn(500, 150)}})).await.unwrap();
-    assert_eq!(done["request_status"], json!("Completed"));
-    let po = t.get(&gina, "SignRequest", po_id).await;
-    let mails = t.list(&gsys, "Communication", json!({"reference_entity": "SignRequest", "reference_id": po_id.to_string()})).await;
-    let copy = mails.iter().find(|m| m["subject"].as_str().unwrap().starts_with("Signed:")).expect("the signer is sent a copy");
-    assert_eq!(copy["attachments"][0]["id"].as_str().unwrap(), &po["sealed_document"].as_str().unwrap()[7..], "the sealed PDF is attached");
-    assert!(copy["content"].as_str().unwrap().contains(po["sealed_sha256"].as_str().unwrap()));
 }
 
 #[test]
@@ -1328,6 +1309,11 @@ fn package(files: &[(&str, &str)]) -> ferrum_meta::Package {
 
 /// [`boot`] with packages of the test's own beside Sign's, and Sign's reports.
 async fn boot_with(settings: KernelSettings, extra: Vec<ferrum_meta::Package>) -> T {
+    boot_mailed(settings, extra, None).await
+}
+
+/// [`boot_with`] on a server that has a mailer.
+async fn boot_mailed(settings: KernelSettings, extra: Vec<ferrum_meta::Package>, mail: Option<Arc<TestMailer>>) -> T {
     let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
     let db = Db::connect(DbConfig { url: url.clone(), max_connections: 16, ..Default::default() }).await.expect("connect");
     sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
@@ -1356,10 +1342,11 @@ async fn boot_with(settings: KernelSettings, extra: Vec<ferrum_meta::Package>) -
     }
     let reports = ferrum_app_sign::reports().into_iter().map(|r| ("sign".to_string(), r)).collect();
     ferrum_domain::reports::set_sources(reports).expect("Sign's reports");
-    let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
+    let mailer = mail.clone().map(|m| m as Arc<dyn ferrum_kernel::Mailer>);
+    let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, mailer).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    T { k, store, sign: sign.expect("Sign's handle"), apps }
+    T { k, store, sign: sign.expect("Sign's handle"), apps, mail }
 }
 
 /// K0-7 (S9): a role that reads Sign Requests but not some of their fields. Reports group, filter and aggregate only on
@@ -1953,4 +1940,89 @@ async fn legacy_unsealed() {
     assert!(t.seal_constraint_checked(&acme).await);
     let refused = t.sql(&acme, "update e_sign_request set status = 'Completed' where tenant_id = $1 and id = $2", open).await;
     assert!(refused.is_err(), "and still refuses a completion without a seal");
+}
+
+#[test]
+fn signers_get_the_workspaces_own_wording_and_brand() {
+    run(wording());
+}
+
+/// S11-G4: a workspace without the Mail app, on a server with a mailer. Links and signed copies are sent from the
+/// package's message templates (through the platform's messages, not Comms' records): the workspace's edit of a template
+/// is in the next mail; the signing link is a secret value, so the message log holds a placeholder, never the token; the
+/// signing page carries the workspace's brand and its own consent sentence.
+async fn wording() {
+    let mail = Arc::new(TestMailer::default());
+    let t = boot_mailed(KernelSettings::default(), vec![], Some(mail.clone())).await;
+    let globex = t.tenant("globex", &["sign"], "UTC").await;
+    let gina = t.user(&globex, "gina@globex.test", "Gina Ortiz", &["Sign User"]).await;
+    let pdf = contract_pdf("Wording");
+    let order = |title: &str| {
+        json!({"title": title, "document": null, "signers": [{"role": "Supplier", "name": "Sam Supplier", "email": "sam@supplier.test"}],
+            "fields": [field("Supplier", "Signature", "Sign", 1, 72, 600, 200, 50)]})
+    };
+    let make = |title: &'static str| {
+        let (t, gina, pdf) = (&t, &gina, &pdf);
+        async move {
+            let mut draft = order(title);
+            draft["document"] = json!(t.upload(gina, "po.pdf", pdf).await);
+            uid(&t.k.insert(gina, "SignRequest", obj(draft)).await.unwrap())
+        }
+    };
+    let po_id = make("Purchase Order").await;
+    assert!(refused(t.k.run_action(&gina, "SignRequest", po_id, "send", json!({})).await, "invalid").contains("Public URL"), "emailed links must be absolute");
+    // The first send created the settings row with the signing key: complete it.
+    let settings = t.list(&globex.admin, "SignSettings", json!({})).await;
+    assert_eq!(settings.len(), 1);
+    let settings_id = uid(&settings[0]);
+    assert_eq!(t.get(&globex.admin, "SignSettings", settings_id).await["signing_key"], json!(true), "the key is a secret: reads only say it is set");
+    t.k.update(&globex.admin, "SignSettings", settings_id, obj(json!({"public_url": "https://erp.globex.test/"})), None).await.unwrap();
+    let sent = t.action(&gina, po_id, "send", json!({})).await;
+    assert_eq!((sent["signers"][0]["emailed"].clone(), sent["signers"][0].get("url").is_none()), (json!(true), true), "emailed, so no link in the answer");
+    let deliver = || async { while t.k.dispatch_outbox_once().await.unwrap_or(0) > 0 {} };
+    deliver().await;
+    let sent_mail = || mail.0.lock().unwrap().clone();
+    let first = sent_mail();
+    assert_eq!(first.len(), 1, "one invitation, with Mail or not");
+    assert_eq!(first[0].0, "sam@supplier.test");
+    assert!(first[0].1.contains("please sign \"Purchase Order\""), "the package's invitation wording: {}", first[0].1);
+    let prefix = "https://erp.globex.test/api/site/globex/sign/s/";
+    let start = first[0].2.find(prefix).expect("an absolute signing link in the email");
+    let token: String = first[0].2[start + prefix.len()..].chars().take(43).collect();
+    // The link is a secret of its message: the log keeps a placeholder, not the token.
+    let log = t.k.message_log(&gina, Some(("SignRequest", po_id)), None, 20).await.unwrap();
+    assert!(!log.is_empty() && !serde_json::to_string(&log).unwrap().contains(&token), "the message log never holds the signing link");
+
+    // The signing page: the workspace's brand and its own consent sentence (none set: null, the page words it).
+    let brand = uid(&t.k.insert(&globex.admin, "Brand", obj(json!({"brand_name": "Globex Legal", "primary_color": "#aa3300"}))).await.unwrap());
+    let (_, view) = t.view(&globex, &token, None).await.unwrap();
+    assert!(view["consent"].is_null(), "no custom sentence: the page words its own");
+    t.k.update(&globex.admin, "SignSettings", settings_id, obj(json!({"brand": brand.to_string(), "consent_text": "  I accept Globex's purchase terms.  "})), None).await.unwrap();
+    let (_, view) = t.view(&globex, &token, None).await.unwrap();
+    assert_eq!(view["brand"]["name"], json!("Globex Legal"), "the signing page carries the settings' brand");
+    assert_eq!(view["consent"], json!("I accept Globex's purchase terms."), "a custom consent is shown, trimmed");
+    let (_, done) = t.sign(&globex, &token, None, json!({"consent": true, "signature": {"image": drawn(500, 150)}})).await.unwrap();
+    assert_eq!(done["request_status"], json!("Completed"));
+    let po = t.get(&gina, "SignRequest", po_id).await;
+    deliver().await;
+    let mails = sent_mail();
+    let copy = mails.iter().find(|m| m.1.starts_with("Signed:")).expect("the signer is sent a copy");
+    assert_eq!(copy.3, vec!["Purchase Order - signed.pdf".to_string()], "the sealed PDF is attached");
+    assert!(copy.2.contains(po["sealed_sha256"].as_str().unwrap()));
+    assert_eq!(
+        t.get(&gina, "SignRequest", po_id).await["sealed_document"].as_str().map(|d| d.len()),
+        po["sealed_document"].as_str().map(|d| d.len()),
+        "sealing is unchanged"
+    );
+
+    // An edit of the reminder template is in the next reminder.
+    let read = t.k.message_template(&globex.admin, "sign.reminder").await.unwrap();
+    let mut def: ferrum_meta::MessageDef = serde_json::from_value(read["template"].clone()).unwrap();
+    def.languages.get_mut("en").unwrap().email.as_mut().unwrap().subject = "Nudge: {{ doc.title }}".into();
+    t.k.save_message_template(&globex.admin, &def).await.unwrap();
+    let second = make("Second Order").await;
+    t.action(&gina, second, "send", json!({})).await;
+    t.action(&gina, second, "remind", json!({})).await;
+    deliver().await;
+    assert!(sent_mail().iter().any(|m| m.1 == "Nudge: Second Order"), "the workspace's wording: {:?}", sent_mail().iter().map(|m| &m.1).collect::<Vec<_>>());
 }
