@@ -10,8 +10,9 @@
 //! * `POST /verify` — a PDF as the body: is it a document sealed here, unchanged?
 //!
 //! The access code, when the signer has one, goes in the `X-Access-Code` header; the session of a signer whose link is
-//! not mailed (`signing_link`), in `X-Sign-Session`. Signed-in users
-//! have no endpoints here: they work through the records API and the requests' actions.
+//! not mailed (`signing_link`), in `X-Sign-Session`. The link's token is the only right on these routes: a caller who also
+//! carries a site session (a customer signed in on the workspace's site) is served exactly as anyone, and that person's
+//! context is never read. Signed-in staff work through the records API and the requests' actions.
 
 use crate::signing::{self, Client, Gate, Reply};
 use crate::{clean, pdf, token};
@@ -39,9 +40,6 @@ impl Site for SignSite {
     }
 
     async fn handle(&self, k: &Kernel, req: SiteRequest) -> Result<SiteResponse> {
-        if req.user.is_some() {
-            return Err(Error::NotFound("endpoint".into()));
-        }
         let path: Vec<&str> = req.path.split('/').filter(|p| !p.is_empty()).collect();
         let client = Client {
             ip: req.client_ip.clone(),

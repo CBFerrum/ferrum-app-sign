@@ -337,6 +337,12 @@ impl T {
 
     /// [`site`](Self::site) with the request's headers (`user-agent` by default).
     async fn site_with(&self, t: &Tenant, method: &str, path: &str, extra: &[(&str, &str)], body: Vec<u8>) -> Result<SiteResponse, Error> {
+        self.site_as(t, None, method, path, extra, body).await
+    }
+
+    /// [`site_with`](Self::site_with) for a caller who carries a site session (a signed-in customer): the platform hands the
+    /// package that person's context.
+    async fn site_as(&self, t: &Tenant, user: Option<&Ctx>, method: &str, path: &str, extra: &[(&str, &str)], body: Vec<u8>) -> Result<SiteResponse, Error> {
         let mut headers = Map::new();
         headers.insert("user-agent".into(), json!("Mozilla/5.0 (it) Firefox/140.0"));
         for (k, v) in extra {
@@ -344,7 +350,7 @@ impl T {
         }
         let req = SiteRequest {
             tenant: t.id,
-            user: None,
+            user: user.cloned(),
             method: method.into(),
             path: path.into(),
             query: Map::new(),
@@ -433,7 +439,12 @@ async fn mailed_code(t: &T, acme: &Tenant, token: &str, phone: &str) -> String {
 /// The latest code the test channel delivered to `phone`.
 async fn texted_code(t: &T, acme: &Tenant, phone: &str) -> String {
     let mut tx = t.k.db.system_tx().await.unwrap();
-    sqlx::query("update job set run_at = now() where status = 'queued'").execute(&mut *tx).await.unwrap();
+    // Only rows this statement can lock, and only those still in the future: another scenario's runner may hold the rest
+    // (two statements making every workspace's jobs due, in different orders, deadlocked: 40P01).
+    sqlx::query("update job set run_at = now() where id in (select id from job where status = 'queued' and run_at > now() for update skip locked)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
     while t.k.run_jobs_once(4).await.unwrap() > 0 {}
     let sent = ferrum_kernel::messages::test_deliveries(acme.id).into_iter().rev().find(|d| d.0 == phone).expect("the code was delivered");
@@ -1758,4 +1769,188 @@ fn opener(url: &str) -> ferrum_kernel::vault::Opener {
         kdf: ferrum_kernel::vault::Kdf { m_kib: 64, t: 1, p: 1 },
         ..Default::default()
     }
+}
+
+impl T {
+    /// A statement without parameters in the workspace's schema, as an upgrade's SQL runs.
+    async fn exec(&self, t: &Tenant, sql: &str) {
+        let mut tx = self.k.db.tenant_tx(t.id).await.unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string())).execute(&mut *tx).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+        tx.commit().await.unwrap();
+    }
+
+    async fn scalar0<O: Send + Unpin + for<'r> sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>>(&self, t: &Tenant, sql: &str) -> O {
+        let mut tx = self.k.db.tenant_tx(t.id).await.unwrap();
+        let v = sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_string())).fetch_one(&mut *tx).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+        tx.commit().await.unwrap();
+        v
+    }
+
+    /// Whether the database has checked `sign_completed_is_sealed` over the rows that were there.
+    async fn seal_constraint_checked(&self, t: &Tenant) -> bool {
+        self.scalar0(t, "select convalidated from pg_constraint where conname = 'sign_completed_is_sealed' and conrelid = 'e_sign_request'::regclass").await
+    }
+
+    /// A request with one signer, sent; its draft's file stays the stored original.
+    async fn one_signer_request(&self, sender: &Ctx, title: &str, pdf: &[u8]) -> (Uuid, String) {
+        let draft = json!({"title": title, "document": self.upload(sender, "one.pdf", pdf).await,
+            "signers": [{"role": "Client", "name": "Cleo", "email": "cleo@client.test"}],
+            "fields": [field("Client", "Signature", "C", 1, 72, 600, 200, 50)]});
+        let id = uid(&self.k.insert(sender, "SignRequest", obj(draft)).await.unwrap());
+        let sent = self.action(sender, id, "send", json!({})).await;
+        (id, token_of(sent["signers"][0]["url"].as_str().unwrap()))
+    }
+}
+
+#[test]
+fn a_signed_in_customer_is_served_a_signing_link_like_anyone() {
+    run(signed_in_customer());
+}
+
+/// S4-P4 (20 Nov): a person who carries a site session (a customer signed in on the workspace's site) reaches the
+/// package's public routes as the platform hands them over, with that person's context. The link's token is the right
+/// on these pages, not the session: every route answers exactly as it does for a caller with no session, whatever the
+/// answer is (a page, a refusal, a closed request), and signing leaves the same trail.
+async fn signed_in_customer() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let pdf = contract_pdf("Customer");
+    let (plain, plain_token) = t.one_signer_request(&asha, "Without a session", &pdf).await;
+    let (session, session_token) = t.one_signer_request(&asha, "With a session", &pdf).await;
+    // What a caller gets, whoever they are: status and body, or the refusal.
+    // (The page's CSP nonce is new on every answer: masked.)
+    let answer = |r: Result<ferrum_kernel::SiteResponse, Error>| {
+        r.map(|r| {
+            let mut body = String::from_utf8_lossy(&r.body).into_owned();
+            while let Some(at) = body.find("nonce=\"").map(|i| i + 7) {
+                let end = body[at..].find('"').map_or(body.len(), |e| at + e);
+                body.replace_range(at..end, "N");
+                body.replace_range(at - 7..at - 1, "nonce_");
+            }
+            (r.status, r.content_type, body)
+        })
+        .map_err(|e| format!("{e:?}"))
+    };
+    for who in [None, Some(&asha)] {
+        let open = answer(t.site_as(&acme, who, "GET", &format!("/s/{plain_token}"), &[], vec![]).await);
+        assert!(open.as_ref().is_ok_and(|(status, _, _)| *status == 200), "the page opens for {:?}: {open:?}", who.map(|w| w.email.clone()));
+    }
+    for (what, path, method) in [
+        ("the page", "/s/{t}", "GET"),
+        ("the request", "/signing/{t}", "GET"),
+        ("the document", "/signing/{t}/document", "GET"),
+        ("a link nobody was given", "/signing/not-a-link", "GET"),
+        ("a code asked for", "/signing/{t}/code", "POST"),
+    ] {
+        let path = path.replace("{t}", &plain_token);
+        let without = answer(t.site_as(&acme, None, method, &path, &[], vec![]).await);
+        let with = answer(t.site_as(&acme, Some(&asha), method, &path, &[], vec![]).await);
+        assert_eq!(with, without, "{what}: the same answer with and without a site session");
+    }
+    // Signing: through the session's request and the plain one, the same outcome and the same trail.
+    let body = json!({"consent": true, "signature": {"text": "Cleo Client"}}).to_string().into_bytes();
+    let signed_plain = t.site_as(&acme, None, "POST", &format!("/signing/{plain_token}/sign"), &[], body.clone()).await.unwrap();
+    let signed_session = t.site_as(&acme, Some(&asha), "POST", &format!("/signing/{session_token}/sign"), &[], body).await.unwrap();
+    assert_eq!((signed_session.status, signed_plain.status), (200, 200));
+    let (a, b): (Value, Value) = (serde_json::from_slice(&signed_plain.body).unwrap(), serde_json::from_slice(&signed_session.body).unwrap());
+    assert_eq!((&a["request_status"], &b["request_status"]), (&json!("Completed"), &json!("Completed")));
+    assert_eq!(t.trail(&acme, plain).await, t.trail(&acme, session).await, "the session changes nothing in the trail");
+    // The person is no one in the trail: the signer is.
+    let actors: Vec<String> = {
+        let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+        let rows = sqlx::query_scalar("select actor from e_sign_event where tenant_id = $1 and request = $2 and event = 'Signed'")
+            .bind(acme.id)
+            .bind(session)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        rows
+    };
+    assert_eq!(actors, vec!["cleo@client.test".to_string()], "the trail names the signer, not the signed-in person");
+    // A finished request answers the same too.
+    for path in [format!("/signing/{plain_token}"), format!("/signing/{plain_token}/document")] {
+        let (without, with) =
+            (answer(t.site_as(&acme, None, "GET", &path, &[], vec![]).await), answer(t.site_as(&acme, Some(&asha), "GET", &path, &[], vec![]).await));
+        assert_eq!(with, without, "{path} once completed");
+    }
+}
+
+/// The migration that adds `sign_completed_is_sealed`, as a workspace's upgrade runs it.
+const SEAL_CONSTRAINT: &str = include_str!("../packages/sign/sql/002_completed_is_sealed.sql");
+
+#[test]
+fn an_old_completed_request_without_its_seal_does_not_stop_the_upgrade() {
+    run(legacy_unsealed());
+}
+
+/// sign-1-window: a workspace that already holds Completed requests without their seal still upgrades (the constraint
+/// is added `not valid`, so no row is checked and no write is held), the database refuses every new completion without a
+/// seal from that moment, upkeep seals the old requests (once, whatever runs together; "Sealed" in the trail, the
+/// original "Completed" kept, nothing sent again) or, for one it cannot seal, tells a person once; and only when no such
+/// row is left does it validate the constraint.
+async fn legacy_unsealed() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let sys = t.sys(&acme);
+    let pdf = contract_pdf("Old");
+    let body = json!({"consent": true, "signature": {"text": "Cleo Client"}});
+    let mut old = vec![];
+    for title in ["Old one", "Old two"] {
+        let (id, token) = t.one_signer_request(&asha, title, &pdf).await;
+        let (status, signed) = t.sign(&acme, &token, None, body.clone()).await.unwrap();
+        assert_eq!((status, signed["request_status"].clone()), (200, json!("Completed")), "{title} was sealed the normal way");
+        old.push(id);
+    }
+    let (kept, stuck) = (old[0], old[1]);
+    // The workspace as an older release left it: no constraint, two Completed requests with no seal.
+    t.exec(&acme, "alter table e_sign_request drop constraint sign_completed_is_sealed").await;
+    for id in &old {
+        t.sql(&acme, "update e_sign_request set sealed_document = null, sealed_sha256 = null where tenant_id = $1 and id = $2", *id).await.unwrap();
+    }
+    let (_pending, _) = t.one_signer_request(&asha, "Still open", &pdf).await;
+    let open: Uuid = t.scalar0(&acme, "select id from e_sign_request where status = 'Sent' limit 1").await;
+
+    // The upgrade: its SQL must go through over those rows, leaving the constraint unchecked.
+    t.exec(&acme, SEAL_CONSTRAINT).await;
+    assert!(!t.seal_constraint_checked(&acme).await, "added not valid: the old rows were not checked");
+    let refused = t.sql(&acme, "update e_sign_request set status = 'Completed' where tenant_id = $1 and id = $2", open).await;
+    assert!(refused.is_err(), "a new completion without a seal is refused from the first moment");
+    assert_eq!(t.scalar0::<i64>(&acme, "select count(*) from e_sign_request where status = 'Completed' and sealed_document is null").await, 2);
+
+    // The stored original of one cannot be read back unchanged: its seal cannot be rebuilt.
+    let original: Uuid = t.get(&sys, "SignRequest", stuck).await["document"].as_str().unwrap()[7..].parse().unwrap();
+    let before = t.store.tamper(original);
+    // Two upkeeps at once: the sealable one is sealed once; the other fails for both and is told once.
+    let (a, b) = tokio::join!(ferrum_app_sign::maintenance(&t.k, acme.id), ferrum_app_sign::maintenance(&t.k, acme.id));
+    assert!(a.is_err() || b.is_err(), "upkeep says the stuck one could not be sealed");
+    let r = t.get(&sys, "SignRequest", kept).await;
+    assert!(r["sealed_document"].is_string() && r["sealed_sha256"].is_string(), "the old request is sealed");
+    assert_eq!(r["status"], json!("Completed"));
+    assert_eq!(t.count(&acme, kept, "Completed").await, 1, "its completion is not recorded again");
+    assert_eq!(t.count(&acme, kept, "Sealed").await, 1, "sealed exactly once, however many upkeeps ran");
+    assert_eq!(t.action(&asha, kept, "verify", json!({})).await["valid"], json!(true), "the trail still verifies");
+    let r = t.get(&sys, "SignRequest", stuck).await;
+    assert!(r["sealed_document"].is_null());
+    assert_eq!(t.count(&acme, stuck, "Seal Failed").await, 1, "a person is told in the trail once");
+    let told = |n: Vec<(String, Option<String>)>| n.into_iter().filter(|(title, _)| title.contains("could not be sealed")).count();
+    assert_eq!(told(t.notifications(&acme, &asha).await), 1);
+    assert!(ferrum_app_sign::maintenance(&t.k, acme.id).await.is_err());
+    assert_eq!((t.count(&acme, stuck, "Seal Failed").await, told(t.notifications(&acme, &asha).await)), (1, 1), "told once, not every minute");
+    assert!(!t.seal_constraint_checked(&acme).await, "not validated while an unsealed Completed request is left");
+
+    // Mended: sealed, and only now is the constraint checked, by upkeep, safe to repeat.
+    t.store.restore(original, before);
+    t.maintenance(&acme).await;
+    let r = t.get(&sys, "SignRequest", stuck).await;
+    assert!(r["sealed_document"].is_string() && r["sealed_sha256"].is_string());
+    assert_eq!((t.count(&acme, stuck, "Completed").await, t.count(&acme, stuck, "Sealed").await), (1, 1));
+    assert_eq!(t.action(&asha, stuck, "verify", json!({})).await["valid"], json!(true));
+    assert!(t.seal_constraint_checked(&acme).await, "validated once no unsealed Completed request is left");
+    t.maintenance(&acme).await;
+    assert!(t.seal_constraint_checked(&acme).await);
+    let refused = t.sql(&acme, "update e_sign_request set status = 'Completed' where tenant_id = $1 and id = $2", open).await;
+    assert!(refused.is_err(), "and still refuses a completion without a seal");
 }

@@ -19,9 +19,17 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Whether a request waits for sealing: in progress, every signer signed, nothing sealed yet.
+/// A request an older release let complete without its seal (the database now refuses it, `sign_completed_is_sealed`,
+/// but rows from before are not checked): Completed, with no sealed PDF or no hash of it.
+pub fn legacy(doc: &Doc) -> bool {
+    s(doc, "status") == Some("Completed") && (s(doc, "sealed_document").is_none() || s(doc, "sealed_sha256").is_none())
+}
+
+/// Whether a request waits for sealing: every signer signed and nothing sealed yet, in progress (it then completes), or
+/// already Completed without a seal (it then only gets the seal).
 pub fn ready(doc: &Doc) -> bool {
-    s(doc, "status") == Some("In Progress") && s(doc, "sealed_document").is_none() && crate::request::signed_by_all(doc)
+    let waiting = (s(doc, "status") == Some("In Progress") && s(doc, "sealed_document").is_none()) || legacy(doc);
+    waiting && crate::request::signed_by_all(doc)
 }
 
 /// Seals the request if it is ready; `Ok(false)` when there was nothing to do. On failure the
@@ -30,7 +38,8 @@ pub async fn seal(k: &Kernel, tenant: Uuid, request: Uuid) -> Result<bool> {
     let sys = Ctx::system(tenant, k.registry.schema(tenant).await?);
     let mut tx = k.db.tenant_tx(tenant).await?;
     let doc = k.get_tx(&sys, &mut tx, "SignRequest", request, false).await?;
-    if !ready(&doc) {
+    // A legacy request that is not fully signed cannot be sealed: it fails below, for a person.
+    if !ready(&doc) && !legacy(&doc) {
         tx.rollback().await?;
         return Ok(false);
     }
@@ -38,8 +47,13 @@ pub async fn seal(k: &Kernel, tenant: Uuid, request: Uuid) -> Result<bool> {
     let settings = settings::load(k, &sys, &mut tx).await?;
     let sender = notice::sender_of(&mut tx, tenant, &doc).await?;
     tx.commit().await?;
-    let completed_at = now();
-    let built = build(k, &sys, &doc, &trail, &settings, sender, completed_at).await;
+    // An old Completed request keeps the moment it completed.
+    let completed_at = if legacy(&doc) { time(&doc, "completed_at").unwrap_or_else(now) } else { now() };
+    let built = if ready(&doc) {
+        build(k, &sys, &doc, &trail, &settings, sender, completed_at).await
+    } else {
+        Err(Error::invalid("the request is Completed without every signature; a person must look at it"))
+    };
     let (file, sealed) = match built {
         Ok(v) => v,
         Err(e) => {
@@ -102,11 +116,23 @@ async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, sha: &str, s
         tx.rollback().await?;
         return Ok(false);
     }
-    let ev = event::record(k, sys, &mut tx, &doc, Entry::new("Completed", "system").details(details)).await?;
+    let old = legacy(&doc);
+    // An old request was completed (and everyone told) before: it only gets its seal, recorded as `Sealed`.
+    let ev = event::record(k, sys, &mut tx, &doc, Entry::new(if old { "Sealed" } else { "Completed" }, "system").details(details)).await?;
     // The sealed PDF belongs to the audit trail.
     document::freeze(&mut tx, sys.tenant, file, ev).await?;
-    let patch = json!({"status": "Completed", "completed_at": ts(at), "sealed_document": format!("/files/{file}"), "sealed_sha256": sha, "seal_error": null});
+    let mut patch = json!({"sealed_document": format!("/files/{file}"), "sealed_sha256": sha, "seal_error": null});
+    if !old {
+        patch["status"] = json!("Completed");
+        patch["completed_at"] = json!(ts(at));
+    }
     let done = k.update_tx(sys, &mut tx, "SignRequest", request, obj(patch), None).await?;
+    if old {
+        let number = s(&done, "number").unwrap_or_default().to_string();
+        notice::notify_sender(&mut tx, sys.tenant, &done, &format!("{number} now has its sealed PDF"), Some("The sealed PDF is on the request.")).await?;
+        tx.commit().await?;
+        return Ok(true);
+    }
     crate::envelope::ended(&mut tx, sys, &done, "Completed").await?;
     let number = s(&done, "number").unwrap_or_default().to_string();
     notice::notify_sender(
@@ -134,8 +160,25 @@ async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, sha: &str, s
 async fn failed(k: &Kernel, sys: &Ctx, doc: &Doc, e: &Error) {
     let res = async {
         let mut tx = k.db.tenant_tx(sys.tenant).await?;
-        let first = s(doc, "seal_error").is_none();
-        k.set_values_tx(sys, &mut tx, "SignRequest", doc_id(doc)?, obj(json!({"seal_error": crate::clean(&e.to_string(), 2000)}))).await?;
+        let id = doc_id(doc)?;
+        let first = if legacy(doc) {
+            // The request itself cannot be written while it is Completed without a seal (the database's check), so the
+            // reason goes to the trail, once, under the request's lock.
+            let fresh = crate::lock_request(k, sys, &mut tx, id).await?;
+            let told: bool = sqlx::query_scalar("select exists (select 1 from e_sign_event where tenant_id = $1 and request = $2 and event = 'Seal Failed')")
+                .bind(sys.tenant)
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+            if legacy(&fresh) && !told {
+                event::record(k, sys, &mut tx, &fresh, Entry::new("Seal Failed", "system").details(crate::clean(&e.to_string(), 500))).await?;
+            }
+            legacy(&fresh) && !told
+        } else {
+            let first = s(doc, "seal_error").is_none();
+            k.set_values_tx(sys, &mut tx, "SignRequest", id, obj(json!({"seal_error": crate::clean(&e.to_string(), 2000)}))).await?;
+            first
+        };
         if first {
             let title = format!("{} is fully signed but could not be sealed", s(doc, "number").unwrap_or_default());
             notice::notify_sender(&mut tx, sys.tenant, doc, &title, Some(&format!("{e}. Sealing is retried automatically."))).await?;

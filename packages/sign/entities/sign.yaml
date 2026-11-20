@@ -255,7 +255,7 @@
     - {name: request, type: link, to: SignRequest, required: true, on_delete: cascade, in_list: true, in_filter: true}
     - {name: seq, type: int, label: No., required: true, in_list: true}
     - {name: event, type: select, required: true, in_list: true, in_filter: true,
-       options: [Sent, Viewed, Signed, Declined, Reminded, Resent, Corrected, Access Denied, Voided, Expired, Completed, Code Sent, Identity Verified, Reassigned, Not Needed, Link Issued]}
+       options: [Sent, Viewed, Signed, Declined, Reminded, Resent, Corrected, Access Denied, Voided, Expired, Completed, Code Sent, Identity Verified, Reassigned, Not Needed, Link Issued, Sealed, Seal Failed]}
     - {name: occurred_at, type: datetime, label: Time, required: true, in_list: true}
     - {name: role, type: data, max_length: 60}
     - {name: signer_name, type: data, max_length: 140}

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.3
+
+Needs the same platform as 0.5.2. Package `sign` 0.3.3 (two trail events).
+
+- **The upgrade no longer fails on an old Completed request without its seal.** The database check that a request is
+  Completed only with its sealed PDF is added `not valid`: it holds for every new and changed row from the first
+  moment, and the rows already there are not checked. Upkeep seals each old request that lacks its seal (the trail gets
+  `Sealed`; its completion is not recorded again, nobody is mailed again) or, for one it cannot seal, records
+  `Seal Failed` once and tells the sender; once none is left it has the database validate the constraint (a step that
+  holds no write and is safe to repeat).
+- **A signed-in customer opens a signing link like anyone.** A caller who carries a site session is served exactly as
+  a caller without one; the link's token is the only right. The trail names the signer, never the session's person.
+
 ## 0.5.2
 
 Needs Ferrum with `Ctx::at_screen()` (S1-P0c). Package `sign` 0.3.2 (one option, one field, one parameter). Interface

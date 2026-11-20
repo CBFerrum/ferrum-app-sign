@@ -575,7 +575,10 @@ pub async fn verify(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Val
     if problem.is_none() && count("Signed") < signed {
         problem = Some("signatures are missing from the trail".into());
     }
-    if problem.is_none() && status(doc) == "Completed" && trail.last().map(|r| r.event.as_str()) != Some("Completed") {
+    // After the completion only a late seal, or the note that it could not be made, may follow.
+    let after = trail.iter().rev().take_while(|r| matches!(r.event.as_str(), "Sealed" | "Seal Failed")).count();
+    let completes = trail.len() > after && trail[trail.len() - after - 1].event == "Completed";
+    if problem.is_none() && status(doc) == "Completed" && !completes {
         problem = Some("the trail does not end with the completion".into());
     }
     let valid = original["ok"] == json!(true) && (sealed.is_null() || sealed["ok"] == json!(true)) && problem.is_none();

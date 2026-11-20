@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.5.2-4f46e5?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.3-4f46e5?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 [![CI](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-sign/actions/workflows/ci.yml)
@@ -41,7 +41,7 @@ Ferrum Sign is for teams that send contracts, offers, forms and approvals to be 
 
 | | |
 |---|---|
-| 📦 **Version** | 0.5.2 |
+| 📦 **Version** | 0.5.3 |
 | 🖥️ **Kind** | Its own interface at `/sign/` and a page for signers at `/sign/s/{workspace}/{token}`, with Ferrum's records screens for the rest |
 | ➕ **What it adds** | 7 entities in one package, 2 roles, 3 reports, a launcher app, a Create menu entry, one message template, 4 events other apps can follow, an assistant |
 | 🧱 **Depends on** | The platform's `core` package. Nothing else is required |
@@ -357,6 +357,7 @@ Sign is compared with DocuSign, Adobe Acrobat Sign, Dropbox Sign, Zoho Sign and 
 
 ### ✅ Recently shipped
 
+- [x] **0.5.3** A workspace that already holds a Completed request without its seal still upgrades; upkeep seals it. A signed-in customer opens a signing link like anyone.
 - [x] **0.5.2** In-person signing hosted by a person at the screen, named on the certificate.
 - [x] **0.5.1** Signers whose page another app opens (delivery Link, `signing_link`), and every new device that opens a link in the trail.
 - [x] **0.5.0** Operations with contracts for other apps and agents, `request_voided`, a code by default for requests from other records.
