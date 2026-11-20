@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0
+
+Needs the same platform as 0.5.3. Package `sign` 0.3.4 (new entities SignDocument, SignBulkSend, SignBulkRecipient; new fields on
+SignField, SignRequest, SignRequestSigner, SignSettings; message templates; one connection description). New dependencies:
+`x509-cert`, `der`, `p256`, `p384` (the platform's lock already holds the last three). Interface rebuilt (`ui/dist`).
+The package no longer needs the Mail app: its mails are Sign's own message templates, sent through the platform.
+
+- **Fields.** Dropdown, Radio (one box per choice), Number (bounds, places) and Attachment (PDF, PNG or JPEG by its bytes, at
+  most 10 MB, three uploads a field, listed with its SHA-256 on the certificate). A new public route takes the upload.
+- **Several documents** in one request (at most 20): each its own boxes, signed and sealed with its own values, one certificate on the
+  main document listing every hash; `verify` and the public check cover each; the outbox event names each sealed document.
+- **Wording and brand.** Invitation, reminder, withdrawal and signed-copy mails are message templates a workspace edits; the signing
+  link is a secret value (a placeholder in the message log); Sign Settings choose the Brand shown on the signing page and may word
+  the consent sentence, which is then printed on the certificate. Sign no longer writes the Mail app's records.
+- **Digital seal.** Every finished document is signed with the workspace's own key (P-256 or P-384, made once and kept in the vault; a
+  certificate authority's key and certificate may replace it, RSA keys are refused): CAdES detached, certified with no later change
+  allowed, the audit trail attached as `audit-trail.json`, and an RFC 3161 time stamp when the workspace names a time-stamping authority
+  connection. `verify` and the public check report the seal.
+- **Bulk send.** One template to up to 1000 recipients, one request each, a few every minute by upkeep, each row once, a daily limit,
+  failed rows recorded, people forgotten once sent.
+- **Embedding.** `Allow Embedding` sets the Embedding for `sign/s`; the page tells the framing site when the signer is done; the
+  fallback page carries the workspace's brand.
+
 ## 0.5.3
 
 Needs the same platform as 0.5.2. Package `sign` 0.3.3 (two trail events).

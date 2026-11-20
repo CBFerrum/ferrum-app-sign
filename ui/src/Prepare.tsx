@@ -147,7 +147,7 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
     set: (next) =>
       ed.set((prev) => {
         const mine = typeof next === "function" ? next(prev.filter(inDoc)) : next;
-        return [...prev.filter((b) => !inDoc(b)), ...mine.map((b) => ({ ...b, document_no: docNo }))];
+        return [...prev.filter((b) => !inDoc(b)), ...mine.map((b) => (docNo > 1 ? { ...b, document_no: docNo } : b))];
       }),
   };
   const at = STEPS.findIndex((s) => s.id === step);
