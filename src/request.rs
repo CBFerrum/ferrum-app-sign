@@ -304,8 +304,10 @@ pub(crate) async fn send(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
         links.push(notice::link_row(&out, &sent, &sg, emailed)?);
     }
     // The original now belongs to the audit trail: its sender can no longer delete it.
-    if let (Some(ev), Some(file)) = (first_event, s(&sent, "document").and_then(document::file_id)) {
-        document::freeze(hc.tx, ctx.tenant, file, ev).await?;
+    if let Some(ev) = first_event {
+        for d in document::documents(&sent) {
+            document::freeze(hc.tx, ctx.tenant, d.file, ev).await?;
+        }
     }
     if !out.mail {
         notice::links_to(hc.tx, ctx, &sent, &links).await?;
@@ -581,12 +583,24 @@ pub async fn verify(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Val
     if problem.is_none() && status(doc) == "Completed" && !completes {
         problem = Some("the trail does not end with the completion".into());
     }
-    let valid = original["ok"] == json!(true) && (sealed.is_null() || sealed["ok"] == json!(true)) && problem.is_none();
+    // The other documents of the request, each checked the same way.
+    let mut others = Vec::new();
+    for d in document::documents(doc).into_iter().filter(|d| d.n > 1) {
+        let original = file_check(k, ctx.tenant, Some(&format!("/files/{}", d.file)), Some(&d.sha256), false).await;
+        let sealed = match d.sealed_document.as_deref() {
+            Some(path) => file_check(k, ctx.tenant, Some(path), d.sealed_sha256.as_deref(), true).await,
+            None => Value::Null,
+        };
+        others.push(json!({"n": d.n, "name": d.name, "original": original, "sealed": sealed}));
+    }
+    let all_ok = others.iter().all(|o| o["original"]["ok"] == json!(true) && (o["sealed"].is_null() || o["sealed"]["ok"] == json!(true)));
+    let valid = original["ok"] == json!(true) && (sealed.is_null() || sealed["ok"] == json!(true)) && all_ok && problem.is_none();
     Ok(json!({
         "valid": valid,
         "status": status(doc),
         "original": original,
         "sealed": sealed,
+        "documents": others,
         "audit_trail": {"ok": problem.is_none(), "events": check.events, "head": check.head, "problem": problem},
     }))
 }

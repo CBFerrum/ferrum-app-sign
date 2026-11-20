@@ -345,9 +345,18 @@ pub struct Sealed {
     pub pages: usize,
 }
 
-/// Stamps `stamps` onto `original`, then appends the certificate that `certificate` writes when
-/// given the signed document's length and SHA-256; `footer` is printed on each certificate page.
-pub fn seal(original: &[u8], stamps: &[Stamp], footer: &str, certificate: &dyn Fn(usize, &str) -> Vec<Para>) -> Result<Sealed, String> {
+/// The original pages with every value stamped, written so a certificate can follow as an incremental update.
+#[derive(Debug, Clone)]
+pub struct Stamped {
+    pub bytes: Vec<u8>,
+    /// SHA-256 (hex) of `bytes`.
+    pub sha256: String,
+    /// The first page's size: what a certificate after it is set in.
+    first: PageSize,
+}
+
+/// Stamps `stamps` onto `original`.
+pub fn stamp(original: &[u8], stamps: &[Stamp]) -> Result<Stamped, String> {
     let mut doc = load(original)?;
     let pages = doc.get_pages();
     let mut by_page: BTreeMap<u32, Vec<&Stamp>> = BTreeMap::new();
@@ -367,8 +376,15 @@ pub fn seal(original: &[u8], stamps: &[Stamp], footer: &str, certificate: &dyn F
     doc.reference_table.cross_reference_type = XrefType::CrossReferenceTable;
     let mut signed = Vec::new();
     doc.save_to(&mut signed).map_err(|e| format!("the signed PDF could not be written ({e})"))?;
+    let sha256 = hex::encode(Sha256::digest(&signed));
+    Ok(Stamped { bytes: signed, sha256, first })
+}
+
+/// Stamps `stamps` onto `original`, then appends the certificate that `certificate` writes when
+/// given the signed document's length and SHA-256; `footer` is printed on each certificate page.
+pub fn seal(original: &[u8], stamps: &[Stamp], footer: &str, certificate: &dyn Fn(usize, &str) -> Vec<Para>) -> Result<Sealed, String> {
+    let Stamped { bytes: signed, sha256: signed_sha256, first } = stamp(original, stamps)?;
     let signed_len = signed.len();
-    let signed_sha256 = hex::encode(Sha256::digest(&signed));
     let paras = certificate(signed_len, &signed_sha256);
     // The certificate uses the first page's size unless that is too small to read.
     let size = if first.width >= 300.0 && first.height >= 300.0 { first } else { PageSize { width: 595.28, height: 841.89 } };

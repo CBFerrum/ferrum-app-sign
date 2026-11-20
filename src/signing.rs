@@ -247,6 +247,7 @@ fn field_view(f: &Doc, signer: &Doc) -> Value {
     let mut v = json!({
         "id": s(f, "id"), "field_type": s(f, "field_type"), "label": s(f, "label"), "page": int(f, "page"),
         "x": coord(f, "x"), "y": coord(f, "y"), "width": coord(f, "width"), "height": coord(f, "height"), "required": crate::b(f, "required"),
+        "document_no": document::document_no(f),
     });
     match s(f, "field_type") {
         Some("Dropdown") => v["options"] = json!(document::choices(f)),
@@ -281,13 +282,16 @@ pub async fn view(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Resu
         let r = &o.request;
         let mine = o.my_fields();
         let needs = |t: &str| mine.iter().any(|f| s(f, "field_type") == Some(t));
-        let pages: Vec<Value> =
-            document::page_sizes(r).unwrap_or_default().iter().enumerate().map(|(i, p)| json!({"page": i + 1, "width": p.width, "height": p.height})).collect();
+        let pages_of = |ps: &[pdf::PageSize]| -> Vec<Value> { ps.iter().enumerate().map(|(i, p)| json!({"page": i + 1, "width": p.width, "height": p.height})).collect() };
+        let pages: Vec<Value> = pages_of(&document::page_sizes(r).unwrap_or_default());
+        // Every document of the request: the main one first (`pages` above stays its pages, for pages that know of one).
+        let documents: Vec<Value> =
+            document::documents(r).iter().map(|d| json!({"n": d.n, "name": d.name, "sha256": d.sha256, "pages": pages_of(&d.pages)})).collect();
         Ok(json!({
             "request": {
                 "number": s(r, "number"), "title": s(r, "title"), "message": s(r, "message"), "status": s(r, "status"),
                 "signing_mode": s(r, "signing_mode"), "expires_at": s(r, "expires_at"), "document_name": s(r, "document_name"),
-                "document_sha256": s(r, "document_sha256"), "pages": pages,
+                "document_sha256": s(r, "document_sha256"), "pages": pages, "documents": documents,
                 "sender": {"organization": settings.sender_name, "name": sender.as_ref().map(|x| &x.0), "email": sender.as_ref().map(|x| &x.1)},
             },
             "signer": {"role": s(&o.signer, "role"), "name": s(&o.signer, "name"), "email": s(&o.signer, "email"), "status": "Viewed"},
@@ -304,13 +308,14 @@ pub async fn view(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Resu
     Ok(gate.reply())
 }
 
-/// `GET /signing/{token}/document`: the original PDF `(file name, bytes)`, after checking it
+/// `GET /signing/{token}/document?n=`: the original PDF `(file name, bytes)`, after checking it
 /// still matches its hash.
-pub async fn document(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Result<Gate<(String, Vec<u8>)>> {
+pub async fn document(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, n: usize) -> Result<Gate<(String, Vec<u8>)>> {
     let gate = with_link(k, tenant, token_str, c, |o, tx, _sys| async move {
         tx.commit().await?;
-        let file = s(&o.request, "document").and_then(document::file_id).ok_or_else(not_found)?;
-        Ok((file, s(&o.request, "document_sha256").unwrap_or_default().to_string(), s(&o.request, "document_name").unwrap_or("document.pdf").to_string()))
+        // Document `n` of the request (1 is the main one).
+        let d = document::documents(&o.request).into_iter().find(|d| d.n == n).ok_or_else(not_found)?;
+        Ok((d.file, d.sha256, d.name))
     })
     .await?;
     let (file, sha, name) = match gate {
@@ -850,11 +855,16 @@ pub async fn verify_presented(k: &Kernel, tenant: Uuid, bytes: &[u8]) -> Result<
     let sha = hex::encode(Sha256::digest(bytes));
     let sys = system(k, tenant).await?;
     let mut tx = k.db.tenant_tx(tenant).await?;
-    let found: Option<Uuid> = sqlx::query_scalar("select id from e_sign_request where tenant_id = $1 and sealed_sha256 = $2 and status = 'Completed' limit 1")
-        .bind(tenant)
-        .bind(&sha)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let more = child_table(&sys, "SignRequest", "more_documents")?;
+    // A document sealed here is the request's main one or one of its further documents.
+    let found: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select r.id from e_sign_request r where r.tenant_id = $1 and r.status = 'Completed' and (r.sealed_sha256 = $2 or exists \
+         (select 1 from {more} m where m.tenant_id = r.tenant_id and m.parent_id = r.id and m.sealed_sha256 = $2)) limit 1"
+    )))
+    .bind(tenant)
+    .bind(&sha)
+    .fetch_optional(&mut *tx)
+    .await?;
     let Some(rid) = found else {
         tx.commit().await?;
         return Ok(
@@ -864,7 +874,8 @@ pub async fn verify_presented(k: &Kernel, tenant: Uuid, bytes: &[u8]) -> Result<
     let doc = k.get_tx(&sys, &mut tx, "SignRequest", rid, false).await?;
     tx.commit().await?;
     // The stored copy must still match its record too.
-    let stored = match s(&doc, "sealed_document").and_then(document::file_id) {
+    let matched = document::documents(&doc).into_iter().find(|d| d.sealed_sha256.as_deref() == Some(sha.as_str()));
+    let stored = match matched.as_ref().and_then(|d| d.sealed_document.as_deref()).and_then(document::file_id) {
         Some(f) => document::bytes(k, tenant, f).await.ok().map(|b| hex::encode(Sha256::digest(&b))),
         None => None,
     };

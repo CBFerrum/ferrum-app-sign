@@ -54,7 +54,7 @@ pub async fn seal(k: &Kernel, tenant: Uuid, request: Uuid) -> Result<bool> {
     } else {
         Err(Error::invalid("the request is Completed without every signature; a person must look at it"))
     };
-    let (file, sealed) = match built {
+    let Built { file, sealed, extra } = match built {
         Ok(v) => v,
         Err(e) => {
             failed(k, &sys, &doc, &e).await;
@@ -64,12 +64,14 @@ pub async fn seal(k: &Kernel, tenant: Uuid, request: Uuid) -> Result<bool> {
     let sha = hex::encode(Sha256::digest(&sealed.bytes));
     let details =
         format!("Sealed PDF SHA-256 {sha} ({} pages); signed document SHA-256 {} (its first {} bytes)", sealed.pages, sealed.signed_sha256, sealed.signed_len);
-    let done = with_retry(|| complete(k, &sys, request, file, &sha, &details, completed_at)).await;
+    let done = with_retry(|| complete(k, &sys, request, file, &extra, &sha, &details, completed_at)).await;
     match done {
         Ok(true) => Ok(true),
         Ok(false) => {
             // Sealed meanwhile by someone else: drop this copy's record.
-            let _ = k.delete_file(&sys, file).await;
+            for f in std::iter::once(file).chain(extra.iter().map(|e| e.file)) {
+                let _ = k.delete_file(&sys, f).await;
+            }
             Ok(false)
         }
         Err(e) => {
@@ -79,7 +81,25 @@ pub async fn seal(k: &Kernel, tenant: Uuid, request: Uuid) -> Result<bool> {
     }
 }
 
-/// Renders and stores the sealed PDF (not yet attached to anything).
+/// What sealing stored: the main document's sealed PDF with the certificate, and each further document signed.
+struct Built {
+    file: Uuid,
+    sealed: pdf::Sealed,
+    extra: Vec<Extra>,
+}
+
+/// One more document, signed: its row, the stored file and that file's SHA-256 (and, for the certificate, what it was).
+struct Extra {
+    row: Uuid,
+    file: Uuid,
+    sha: String,
+    n: usize,
+    name: String,
+    original_sha: String,
+}
+
+/// Renders and stores the sealed PDFs (not yet attached to anything): every further document signed with its own values,
+/// then the main one with the certificate, which lists them all.
 async fn build(
     k: &Kernel,
     sys: &Ctx,
@@ -88,28 +108,54 @@ async fn build(
     settings: &settings::Settings,
     sender: Option<(String, String)>,
     completed_at: DateTime<Utc>,
-) -> Result<(Uuid, pdf::Sealed)> {
-    let file = s(doc, "document").and_then(document::file_id).ok_or_else(|| Error::invalid("the request has no document"))?;
-    let original = document::bytes(k, sys.tenant, file).await.map_err(|e| Error::invalid(format!("the original PDF cannot be read: {e}")))?;
-    if Some(hex::encode(Sha256::digest(&original)).as_str()) != s(doc, "document_sha256") {
-        return Err(Error::invalid("the stored original no longer matches its SHA-256; it was changed after sending"));
+) -> Result<Built> {
+    let docs = document::documents(doc);
+    let main = docs.iter().find(|d| d.n == 1).ok_or_else(|| Error::invalid("the request has no document"))?;
+    let read = |d: &document::DocRef| {
+        let (n, file, sha) = (d.n, d.file, d.sha256.clone());
+        async move {
+            let bytes = document::bytes(k, sys.tenant, file).await.map_err(|e| Error::invalid(format!("the original PDF of document {n} cannot be read: {e}")))?;
+            if hex::encode(Sha256::digest(&bytes)) != sha {
+                return Err(Error::invalid(format!("the stored original of document {n} no longer matches its SHA-256; it was changed after sending")));
+            }
+            Ok(bytes)
+        }
+    };
+    let store = |name: String, bytes: Vec<u8>| async move {
+        let stored = k.store_file(sys, None, &name, "application/pdf", &bytes).await?;
+        stored.get("id").and_then(|v| v.as_str()).and_then(|v| v.parse::<Uuid>().ok()).ok_or_else(|| Error::internal("stored file without id"))
+    };
+    let mut extra: Vec<Extra> = Vec::new();
+    for d in docs.iter().filter(|d| d.n > 1) {
+        let original = read(d).await?;
+        let marks = stamps(doc, d.n).map_err(Error::invalid)?;
+        let signed = tokio::task::spawn_blocking(move || pdf::stamp(&original, &marks))
+            .await
+            .map_err(|_| Error::internal("sealing the PDF failed"))?
+            .map_err(Error::invalid)?;
+        let base: String = d.name.trim_end_matches(".pdf").chars().filter(|c| c.is_alphanumeric() || " -_.,()".contains(*c)).take(100).collect();
+        let file = store(format!("{} - signed.pdf", if base.trim().is_empty() { "document" } else { base.trim() }), signed.bytes).await?;
+        let row = d.row.ok_or_else(|| Error::internal("a further document without its row"))?;
+        extra.push(Extra { row, file, sha: signed.sha256, n: d.n, name: d.name.clone(), original_sha: d.sha256.clone() });
     }
-    let stamps = stamps(doc).map_err(Error::invalid)?;
-    let cert = Certificate::new(doc, trail, settings, sender, completed_at);
+    let original = read(main).await?;
+    let marks = stamps(doc, 1).map_err(Error::invalid)?;
+    let more = extra.iter().map(|e| (e.n, e.name.clone(), e.original_sha.clone(), e.sha.clone())).collect();
+    let cert = Certificate::new(doc, trail, settings, sender, completed_at, more);
     let footer = cert.footer.clone();
-    let sealed = tokio::task::spawn_blocking(move || pdf::seal(&original, &stamps, &footer, &|len, sha| cert.paras(len, sha)))
+    let sealed = tokio::task::spawn_blocking(move || pdf::seal(&original, &marks, &footer, &|len, sha| cert.paras(len, sha)))
         .await
         .map_err(|_| Error::internal("sealing the PDF failed"))?
         .map_err(Error::invalid)?;
     let title: String = s(doc, "title").unwrap_or("document").chars().filter(|c| c.is_alphanumeric() || " -_.,()".contains(*c)).take(100).collect();
     let name = format!("{} - signed.pdf", if title.trim().is_empty() { s(doc, "number").unwrap_or("document") } else { title.trim() });
-    let stored = k.store_file(sys, None, &name, "application/pdf", &sealed.bytes).await?;
-    let id = stored.get("id").and_then(|v| v.as_str()).and_then(|v| v.parse().ok()).ok_or_else(|| Error::internal("stored file without id"))?;
-    Ok((id, sealed))
+    let file = store(name, sealed.bytes.clone()).await?;
+    Ok(Built { file, sealed, extra })
 }
 
 /// Completes the request with the stored sealed PDF, if it is still ready.
-async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, sha: &str, details: &str, at: DateTime<Utc>) -> Result<bool> {
+#[allow(clippy::too_many_arguments)]
+async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, extra: &[Extra], sha: &str, details: &str, at: DateTime<Utc>) -> Result<bool> {
     let mut tx = k.db.tenant_tx(sys.tenant).await?;
     let doc = crate::lock_request(k, sys, &mut tx, request).await?;
     if !ready(&doc) {
@@ -121,6 +167,11 @@ async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, sha: &str, d
     let ev = event::record(k, sys, &mut tx, &doc, Entry::new(if old { "Sealed" } else { "Completed" }, "system").details(details)).await?;
     // The sealed PDF belongs to the audit trail.
     document::freeze(&mut tx, sys.tenant, file, ev).await?;
+    // The further documents, signed, are the audit trail's too, and each is recorded on its row under the same lock.
+    for e in extra {
+        document::freeze(&mut tx, sys.tenant, e.file, ev).await?;
+        k.set_child_values_tx(sys, &mut tx, "SignRequest", "more_documents", e.row, obj(json!({"sealed_document": format!("/files/{}", e.file), "sealed_sha256": e.sha}))).await?;
+    }
     let mut patch = json!({"sealed_document": format!("/files/{file}"), "sealed_sha256": sha, "seal_error": null});
     if !old {
         patch["status"] = json!("Completed");
@@ -195,10 +246,10 @@ pub const KIND: &str = "Simple electronic signature with an audit trail. Not an 
                         PAdES digital signature: no signing certificate, signature device or timestamp authority was used.";
 
 /// What each field shows on the sealed pages.
-pub fn stamps(doc: &Doc) -> std::result::Result<Vec<Stamp>, String> {
+pub fn stamps(doc: &Doc, document_no: usize) -> std::result::Result<Vec<Stamp>, String> {
     let signers: HashMap<String, Doc> = rows(doc, "signers").into_iter().map(|r| (role_key(s(&r, "role").unwrap_or_default()), r)).collect();
     let mut out = Vec::new();
-    for f in rows(doc, "fields") {
+    for f in rows(doc, "fields").into_iter().filter(|f| document::document_no(f) == document_no) {
         let Some(sg) = signers.get(&role_key(s(&f, "role").unwrap_or_default())) else { continue };
         let ink = |kind: &str| -> std::result::Result<Option<Mark>, String> {
             if let Some(url) = s(sg, &format!("{kind}_image")) {
@@ -241,12 +292,21 @@ struct Certificate {
     signers: Vec<[String; 3]>,
     /// Per signer: the files they attached, with their size and SHA-256.
     attached: Vec<Vec<String>>,
+    /// The further documents: `(n, name, original SHA-256, signed SHA-256)`.
+    more: Vec<(usize, String, String, String)>,
     events: Vec<String>,
     footer: String,
 }
 
 impl Certificate {
-    fn new(doc: &Doc, trail: &[event::Row], settings: &settings::Settings, sender: Option<(String, String)>, completed_at: DateTime<Utc>) -> Certificate {
+    fn new(
+        doc: &Doc,
+        trail: &[event::Row],
+        settings: &settings::Settings,
+        sender: Option<(String, String)>,
+        completed_at: DateTime<Utc>,
+        more: Vec<(usize, String, String, String)>,
+    ) -> Certificate {
         let when = |key: &str| time(doc, key).map(human).unwrap_or_default();
         let number = s(doc, "number").unwrap_or_default().to_string();
         let sender = match sender {
@@ -351,6 +411,7 @@ impl Certificate {
             trail_head: trail.last().and_then(|e| e.event_hash.clone()).unwrap_or_default(),
             signers,
             attached,
+            more,
             events,
             footer: format!("{number} · {title}"),
         }
@@ -376,6 +437,11 @@ impl Certificate {
             .muted()
             .indent(12.0),
         );
+        for (n, name, original, signed) in &self.more {
+            p.push(Para::new(format!("Document {n}: {name}"), 9.0).before(6.0));
+            p.push(Para::new(format!("Original SHA-256: {original}"), 8.5).before(1.0).indent(12.0));
+            p.push(Para::new(format!("Signed SHA-256: {signed} (the whole file: it carries no certificate pages)"), 8.5).before(1.0).indent(12.0));
+        }
         p.push(Para::new(format!("Audit trail SHA-256: {}", self.trail_head), 9.0).before(2.0));
         p.push(Para::new("The last link of the hash chain over the events below; verifying the request recomputes it.", 8.0).muted().indent(12.0));
         p.push(Para::new("Signers", 12.0).before(14.0));
@@ -428,8 +494,8 @@ mod tests {
     fn the_certificate_prints_a_custom_consent_only() {
         let doc: Doc = serde_json::from_value(json!({"number": "SIG-1", "title": "T"})).unwrap();
         let line = |c: &Certificate| c.head.iter().find(|(k, _)| k == "Signers agreed to").map(|(_, v)| v.clone());
-        assert_eq!(line(&Certificate::new(&doc, &[], &settings(Some("I accept Acme's terms.")), None, now())).as_deref(), Some("I accept Acme's terms."));
-        assert_eq!(line(&Certificate::new(&doc, &[], &settings(None), None, now())), None);
+        assert_eq!(line(&Certificate::new(&doc, &[], &settings(Some("I accept Acme's terms.")), None, now(), vec![])).as_deref(), Some("I accept Acme's terms."));
+        assert_eq!(line(&Certificate::new(&doc, &[], &settings(None), None, now(), vec![])), None);
     }
 
     fn request(fields: Value) -> Doc {
@@ -449,11 +515,11 @@ mod tests {
             {"id": "n", "role": "Client", "field_type": "Number", "page": 1, "x": 10, "y": 70, "width": 100, "height": 20, "value": "7"},
             {"id": "att", "label": "ID card", "role": "Client", "field_type": "Attachment", "page": 1, "x": 10, "y": 100, "width": 100, "height": 20, "value": "f1"},
         ]));
-        let stamps = stamps(&doc).unwrap();
+        let stamps = stamps(&doc, 1).unwrap();
         assert_eq!(stamps.len(), 3, "the attachment has no stamp");
         assert!(matches!(stamps[0].mark, Mark::Check) && (stamps[0].x, stamps[0].width) == (60.0, 14.0), "the chosen box carries the tick");
         assert!(matches!(&stamps[1].mark, Mark::Text(t) if t == "Pro") && matches!(&stamps[2].mark, Mark::Text(t) if t == "7"));
-        let cert = Certificate::new(&doc, &[], &settings(None), None, now());
+        let cert = Certificate::new(&doc, &[], &settings(None), None, now(), vec![]);
         assert_eq!(cert.attached, vec![vec!["ID card: id.png · 42 bytes · SHA-256 abc123".to_string()]]);
         let none = request(json!([{"id": "r", "role": "Client", "field_type": "Radio", "page": 1, "x": 10, "y": 10, "width": 100, "height": 14,
             "options": ["Red"], "option_boxes": [[10, 10, 14, 14]]}]));
@@ -461,6 +527,6 @@ mod tests {
     }
 
     fn stamps_of(doc: &Doc) -> Vec<Stamp> {
-        stamps(doc).unwrap()
+        stamps(doc, 1).unwrap()
     }
 }

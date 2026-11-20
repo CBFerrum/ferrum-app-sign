@@ -57,21 +57,55 @@ pub async fn freeze(tx: &mut Tx, tenant: Uuid, file: Uuid, event: Uuid) -> Resul
 
 /// When `document` changed: checks it is a PDF the caller may use (their own upload, or a file
 /// of a record they can read), records its name, SHA-256 and page sizes, and makes the file the
-/// record's own — the caller's unattached upload is attached, anything else is copied.
+/// record's own — the caller's unattached upload is attached, anything else is copied. Then the same for each of the
+/// request's more documents.
 pub async fn derive(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
-    let Some(path) = s(doc, "document").map(str::to_string) else { return Ok(()) };
     let record = doc_id(doc)?;
-    let tenant = hc.ctx.tenant;
     let stored: Option<Option<String>> =
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!("select document from {} where tenant_id = $1 and id = $2", ferrum_kernel::ddl::q(&hc.entity.table))))
-            .bind(tenant)
+            .bind(hc.ctx.tenant)
             .bind(record)
             .fetch_optional(&mut **hc.tx)
             .await?;
-    if stored.flatten().as_deref() == Some(path.as_str()) && doc.get("page_count").is_some_and(|v| !v.is_null()) {
+    derive_file(hc, doc, record, stored.flatten(), "document").await?;
+    // More documents: each row the same way (a row already saved with the same file keeps what was derived).
+    let mut more = rows(doc, "more_documents");
+    if more.len() > 19 {
+        return Err(Error::field("more_documents", "a request has at most 20 documents"));
+    }
+    if more.is_empty() {
         return Ok(());
     }
-    let bad = |m: &str| Error::field("document", m);
+    let table = crate::child_table(hc.ctx, "SignRequest", "more_documents")?;
+    for (i, row) in more.iter_mut().enumerate() {
+        let row_id = crate::id(row, "id");
+        let stored: Option<Option<String>> = match row_id {
+            Some(rid) => {
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("select document from {table} where tenant_id = $1 and id = $2")))
+                    .bind(hc.ctx.tenant)
+                    .bind(rid)
+                    .fetch_optional(&mut **hc.tx)
+                    .await?
+            }
+            None => None,
+        };
+        derive_file(hc, row, record, stored.flatten(), "document").await.map_err(|e| match e {
+            Error::Validation(v) => Error::Validation(v.into_iter().map(|f| f.in_row("more_documents", i)).collect()),
+            other => other,
+        })?;
+    }
+    doc.insert("more_documents".into(), Value::Array(more.into_iter().map(Value::Object).collect()));
+    Ok(())
+}
+
+/// One document's file (`doc["document"]`, in `record`'s name): checked and measured, as [`derive`] says.
+async fn derive_file(hc: &mut HookCtx<'_>, doc: &mut Doc, record: Uuid, stored: Option<String>, key: &str) -> Result<()> {
+    let Some(path) = s(doc, key).map(str::to_string) else { return Ok(()) };
+    let tenant = hc.ctx.tenant;
+    if stored.as_deref() == Some(path.as_str()) && doc.get("page_count").is_some_and(|v| !v.is_null()) {
+        return Ok(());
+    }
+    let bad = |m: &str| Error::field(key, m);
     let unusable = || bad("the file does not exist or you may not use it");
     let file = file_id(&path).ok_or_else(|| bad("upload the PDF with POST /api/files and use its /files/<id> path"))?;
     let row: Option<(String, Option<String>, Option<Uuid>, Option<Uuid>)> =
@@ -100,7 +134,7 @@ pub async fn derive(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
     .map_err(|_| bad("the PDF cannot be read"))?;
     let pages = pages.map_err(|m| bad(&m))?;
     let owned = own(hc, &row, &data, record).await?;
-    doc.insert("document".into(), json!(format!("/files/{owned}")));
+    doc.insert(key.into(), json!(format!("/files/{owned}")));
     doc.insert("document_name".into(), json!(crate::clean(&row.name, 200)));
     doc.insert("document_sha256".into(), json!(hex::encode(Sha256::digest(&data))));
     doc.insert("page_count".into(), json!(pages.len()));
@@ -128,6 +162,46 @@ async fn own(hc: &mut HookCtx<'_>, row: &FileRow, data: &[u8], record: Uuid) -> 
 /// Signer roles as compared: trimmed, case-insensitive.
 pub fn role_key(role: &str) -> String {
     role.trim().to_lowercase()
+}
+
+/// One document of a request, as the engine reads it: `1` is the main document (the request's own `document` columns),
+/// `2…` are its `more_documents` rows in order.
+pub struct DocRef {
+    pub n: usize,
+    pub file: Uuid,
+    pub name: String,
+    pub sha256: String,
+    pub pages: Vec<PageSize>,
+    /// The row of `more_documents` (none for the main document).
+    pub row: Option<Uuid>,
+    pub sealed_document: Option<String>,
+    pub sealed_sha256: Option<String>,
+}
+
+/// Every document of the request, the main one first; a row without a readable file is left out.
+pub fn documents(doc: &Doc) -> Vec<DocRef> {
+    let one = |n: usize, d: &Doc, row: Option<Uuid>| {
+        Some(DocRef {
+            n,
+            file: s(d, "document").and_then(file_id)?,
+            name: s(d, "document_name").unwrap_or("document.pdf").to_string(),
+            sha256: s(d, "document_sha256").unwrap_or_default().to_string(),
+            pages: page_sizes(d).unwrap_or_default(),
+            row,
+            sealed_document: s(d, "sealed_document").map(str::to_string),
+            sealed_sha256: s(d, "sealed_sha256").map(str::to_string),
+        })
+    };
+    let mut out: Vec<DocRef> = one(1, doc, None).into_iter().collect();
+    for (i, r) in rows(doc, "more_documents").iter().enumerate() {
+        out.extend(one(i + 2, r, crate::id(r, "id")));
+    }
+    out
+}
+
+/// Which document a field is on.
+pub fn document_no(f: &Doc) -> usize {
+    int(f, "document_no").max(1) as usize
 }
 
 /// Displayed page sizes recorded by [`derive`].
@@ -223,9 +297,17 @@ fn check_kind(f: &Doc, at: &dyn Fn(&str, String) -> FieldError, page: Option<Pag
 /// Every field names an existing role and lies on an existing page, inside it; a Dropdown, Radio, Number or
 /// Attachment carries what it needs (`check_kind`).
 pub fn check_fields(doc: &Doc, roles: &HashSet<String>, errors: &mut Vec<FieldError>) {
-    let pages = page_sizes(doc);
+    let docs = documents(doc);
+    let more = rows(doc, "more_documents").len();
     for (i, f) in rows(doc, "fields").iter().enumerate() {
         let at = |field: &str, m: String| FieldError::new(field, m).in_row("fields", i);
+        let n = document_no(f);
+        if n > more + 1 {
+            errors.push(at("document_no", format!("the request has {} document{}, not {n}", more + 1, if more == 0 { "" } else { "s" })));
+            continue;
+        }
+        // The pages of the document the box is on (none yet while that file is not read).
+        let pages = docs.iter().find(|d| d.n == n).map(|d| d.pages.clone()).filter(|p| !p.is_empty());
         let role = s(f, "role").unwrap_or_default();
         if !role.trim().is_empty() && !roles.contains(&role_key(role)) {
             errors.push(at("role", format!("no signer has the role {}", role.trim())));

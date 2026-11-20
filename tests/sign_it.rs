@@ -369,12 +369,14 @@ impl T {
         for (k, v) in extra {
             headers.insert(k.to_string(), json!(v));
         }
+        let (path, query) = path.split_once('?').unwrap_or((path, ""));
+        let query: Map<String, Value> = query.split('&').filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), json!(v))).collect();
         let req = SiteRequest {
             tenant: t.id,
             user: user.cloned(),
             method: method.into(),
             path: path.into(),
-            query: Map::new(),
+            query,
             headers,
             body,
             client_ip: "203.0.113.7".into(),
@@ -2155,4 +2157,89 @@ async fn richer_fields() {
     assert_eq!(status, 200);
     let r = t.get(&asha, "SignRequest", id).await;
     assert_eq!(r["status"], json!("Completed"), "{}", r["seal_error"]);
+}
+
+#[test]
+fn several_documents_are_signed_and_sealed_in_one_request() {
+    run(several_documents());
+}
+
+/// S11-G3: one request, three documents. A box names the document it is on; the signer reads each one; sealing stamps each
+/// with its own values (one certificate, on the main document, listing all three hashes); every document is checked by
+/// `verify` and by the public check, and the original of none can be changed after sending.
+async fn several_documents() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let sys = t.sys(&acme);
+    let (one, two, three) = (contract_pdf("One"), contract_pdf("Two"), contract_pdf("Three"));
+    let on = |n: i64, mut f: Value| {
+        f["document_no"] = json!(n);
+        f
+    };
+    let (tr, ar, o, tw, th) = (&t, &asha, &one, &two, &three);
+    let draft = move |fields: Vec<Value>| async move {
+        json!({"title": "Three documents", "document": tr.upload(ar, "one.pdf", o).await,
+            "more_documents": [{"document": tr.upload(ar, "two.pdf", tw).await}, {"document": tr.upload(ar, "three.pdf", th).await}],
+            "signers": [{"role": "Client", "name": "Cleo", "email": "cleo@client.test"}], "fields": fields})
+    };
+    // A box on a document the request does not have is refused.
+    let m = refused(t.k.insert(&asha, "SignRequest", obj(draft(vec![on(4, field("Client", "Signature", "S", 1, 72, 600, 200, 50))]).await)).await, "invalid");
+    assert!(m.contains("3 documents"), "{m}");
+    let fields = vec![
+        field("Client", "Signature", "S1", 1, 72, 600, 200, 50),
+        on(2, field("Client", "Text", "Note", 1, 72, 500, 200, 22)),
+        on(3, field("Client", "Initials", "Ini", 2, 100, 100, 56, 32)),
+    ];
+    let id = uid(&t.k.insert(&asha, "SignRequest", obj(draft(fields).await)).await.unwrap());
+    let sent = t.action(&asha, id, "send", json!({})).await;
+    let token = token_of(sent["signers"][0]["url"].as_str().unwrap());
+    let r = t.get(&asha, "SignRequest", id).await;
+    assert_eq!(r["more_documents"].as_array().unwrap().len(), 2);
+    assert!(r["more_documents"][0]["document_sha256"].is_string() && r["more_documents"][1]["page_count"] == json!(2), "each document is measured");
+
+    // The signer is shown three documents and reads each.
+    let (_, view) = t.view(&acme, &token, None).await.unwrap();
+    assert_eq!(view["request"]["documents"].as_array().unwrap().len(), 3);
+    let on_docs: Vec<i64> = view["fields"].as_array().unwrap().iter().map(|f| f["document_no"].as_i64().unwrap()).collect();
+    assert_eq!(on_docs, vec![1, 2, 3], "each box says which document it is on");
+    for (n, bytes) in [(1, &one), (2, &two), (3, &three)] {
+        let got = t.site(&acme, "GET", &format!("/signing/{token}/document?n={n}"), None, vec![]).await.unwrap();
+        assert_eq!(sha(&got.body), sha(bytes), "document {n} is the one sent");
+    }
+    refused(t.site(&acme, "GET", &format!("/signing/{token}/document?n=4"), None, vec![]).await, "not found");
+
+    let note = field_id(&r, "Note");
+    let (status, done) = t
+        .sign(&acme, &token, None, json!({"consent": true, "signature": {"text": "Cleo Client"}, "values": {note.clone(): "Seen"}}))
+        .await
+        .unwrap();
+    assert_eq!((status, done["request_status"].clone()), (200, json!("Completed")), "{done}");
+    let r = t.get(&asha, "SignRequest", id).await;
+    let sealed: Vec<(String, String)> = std::iter::once(&r)
+        .chain(r["more_documents"].as_array().unwrap().iter().map(|d| d.as_object().unwrap()).collect::<Vec<_>>())
+        .map(|d| (d["sealed_document"].as_str().unwrap().to_string(), d["sealed_sha256"].as_str().unwrap().to_string()))
+        .collect();
+    assert_eq!(sealed.iter().map(|x| &x.1).collect::<std::collections::HashSet<_>>().len(), 3, "three different sealed files");
+    assert_eq!(t.count(&acme, id, "Completed").await, 1);
+    let payload: Value = t.scalar(&acme, "select payload from outbox where tenant_id = $1 and topic = 'sign.request_completed' and record_id = $2", id).await;
+    assert_eq!(payload["documents"].as_array().unwrap().len(), 3, "the outbox names every sealed document");
+
+    // Checked: the request's own verify, and a presented second document.
+    let verdict = t.action(&asha, id, "verify", json!({})).await;
+    assert_eq!(verdict["valid"], json!(true), "{verdict}");
+    assert_eq!(verdict["documents"].as_array().unwrap().len(), 2);
+    let file_of = |p: &str| -> Uuid { p[7..].parse().unwrap() };
+    let second = t.k.read_file(&sys, file_of(&sealed[1].0)).await.unwrap().2;
+    let presented = t.verify_pdf(&acme, second.clone()).await;
+    assert_eq!((presented["valid"].clone(), presented["request"]["number"].clone()), (json!(true), r["number"].clone()), "{presented}");
+    // One changed byte in the third sealed file: the request no longer verifies, and says which.
+    let third = file_of(&sealed[2].0);
+    let kept = t.store.tamper(third);
+    let verdict = t.action(&asha, id, "verify", json!({})).await;
+    assert_eq!(verdict["valid"], json!(false));
+    assert_eq!(verdict["documents"][1]["sealed"]["ok"], json!(false), "document 3 is the one named");
+    assert_eq!(verdict["documents"][0]["sealed"]["ok"], json!(true));
+    t.store.restore(third, kept);
+    assert_eq!(t.action(&asha, id, "verify", json!({})).await["valid"], json!(true));
 }

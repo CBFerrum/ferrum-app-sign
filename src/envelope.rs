@@ -137,7 +137,8 @@ pub(crate) async fn ended(tx: &mut Tx, ctx: &Ctx, request: &Doc, status: &str) -
     };
     let mut payload = json!({"request": s(request, "id"), "number": s(request, "number"), "status": status,
                          "reference_entity": s(request, "reference_entity"), "reference_id": s(request, "reference_id"),
-                         "sealed_document": s(request, "sealed_document")});
+                         "sealed_document": s(request, "sealed_document"),
+                         "documents": document::documents(request).iter().map(|d| json!({"name": d.name, "sealed_document": d.sealed_document, "sealed_sha256": d.sealed_sha256})).collect::<Vec<_>>()});
     if status == "Voided" {
         payload["reason"] = json!(s(request, "void_reason"));
     }

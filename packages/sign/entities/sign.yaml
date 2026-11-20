@@ -43,6 +43,7 @@
     - {name: width, type: decimal, required: true, min: 4, max: 14400, in_list: true}
     - {name: height, type: decimal, required: true, min: 4, max: 14400, in_list: true}
     - {name: required, type: check, default: true, in_list: true}
+    - {name: document_no, type: int, default: 1, min: 1, max: 20, in_list: true, description: "Which document of the request the box is on: 1 is the main document, then More Documents in order"}
     - {name: options, type: json, description: "Dropdown, Radio: the choices, a list of 1 to 50 distinct texts of at most 100 characters"}
     - {name: option_boxes, type: json, description: "Radio: one box per choice, [[x, y, width, height], ...] in points on the field's page, in the order of the choices"}
     - {name: min_value, type: data, max_length: 40, description: "Number: the smallest value allowed"}
@@ -50,6 +51,18 @@
     - {name: decimals, type: int, min: 0, max: 6, description: "Number: places after the point allowed (default 0)"}
     - {name: accept, type: data, max_length: 100, description: "Attachment: the kinds of file allowed, any of pdf, png, jpg separated by commas (default all three); at most 10 MB"}
     - {name: value, type: text, read_only: true, no_copy: true, description: "What the signer entered (name, date, text, Yes/No, a choice, a number, an attachment's file; signatures are kept on the signer)"}
+
+- name: SignDocument
+  label: Sign Document
+  kind: child
+  fields:
+    - {name: document, type: attach, required: true, description: "A PDF to sign in the same request: upload it with POST /api/files and set its /files/<id> path"}
+    - {name: document_name, type: data, read_only: true, no_copy: true}
+    - {name: document_sha256, type: data, label: Document SHA-256, read_only: true, no_copy: true}
+    - {name: page_count, type: int, read_only: true, no_copy: true}
+    - {name: page_sizes, type: json, read_only: true, hidden: true, no_copy: true, description: "[[width, height], ...] of each page as displayed, in points"}
+    - {name: sealed_document, type: attach, read_only: true, no_copy: true, description: "This document signed (no certificate pages: the certificate is on the main document)"}
+    - {name: sealed_sha256, type: data, label: Sealed SHA-256, read_only: true, no_copy: true}
 
 - name: SignTemplate
   label: Sign Template
@@ -174,6 +187,7 @@
     - {name: void_reason, type: text, read_only: true, no_copy: true}
     - {name: sealed_document, type: attach, read_only: true, no_copy: true, description: "The signed PDF with its audit certificate"}
     - {name: sealed_sha256, type: data, label: Sealed SHA-256, read_only: true, no_copy: true}
+    - {name: more_documents, type: table, of: SignDocument, description: "Documents 2 onwards, signed in the same request (at most 19); fields name the one they are on with Document No"}
     - {name: seal_error, type: text, read_only: true, hidden: true, no_copy: true, description: "Why sealing last failed (it is retried)"}
     - {name: signers, type: table, of: SignRequestSigner}
     - {name: fields, type: table, of: SignField}

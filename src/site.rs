@@ -57,7 +57,7 @@ impl Site for SignSite {
         let mut resp = match (req.method.as_str(), path.as_slice()) {
             ("GET", ["s", t]) => page(t)?,
             ("GET", ["signing", t]) => signing::view(k, tenant, t, &client).await?.into_response(),
-            ("GET", ["signing", t, "document"]) => match signing::document(k, tenant, t, &client).await? {
+            ("GET", ["signing", t, "document"]) => match signing::document(k, tenant, t, &client, document_number(&req)).await? {
                 Gate::Open((name, bytes)) => pdf_response(&name, bytes),
                 Gate::Gone(m, state) => Reply::Gone(m, state).into_response(),
             },
@@ -78,6 +78,11 @@ impl Site for SignSite {
         }
         Ok(resp)
     }
+}
+
+/// `?n=` of a document request: which document of the request, 1 when absent or not a number.
+fn document_number(req: &SiteRequest) -> usize {
+    req.query.get("n").and_then(|v| v.as_str().map(str::to_string).or_else(|| v.as_u64().map(|n| n.to_string()))).and_then(|n| n.parse().ok()).filter(|n| (1..=20).contains(n)).unwrap_or(1)
 }
 
 fn pdf_response(name: &str, bytes: Vec<u8>) -> SiteResponse {
