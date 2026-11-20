@@ -43,7 +43,7 @@ impl DocHook for BulkHook {
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, _params: &Value) -> Result<Option<Value>> {
         match name {
             "start" => start(hc, doc).await.map(Some),
-            "cancel" => cancel(hc, doc).await.map(Some),
+            "stop" => stop(hc, doc).await.map(Some),
             _ => Ok(None),
         }
     }
@@ -122,7 +122,7 @@ async fn start(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
 }
 
 /// Stops further rows; the people of the rows not yet sent are forgotten in the same transaction.
-async fn cancel(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
+async fn stop(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     let (k, ctx) = (hc.kernel, hc.ctx);
     let table = child_table(ctx, "SignBulkSend", "recipients")?;
     // Under the bulk's lock, so a row being sent finishes first and the rest are never started.

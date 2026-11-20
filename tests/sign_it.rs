@@ -2385,7 +2385,7 @@ async fn bulk() {
     // Stopping forgets the rows not yet sent and sends no more.
     let stopped = bulk_of(&asha, (10..=12).map(person).collect()).await;
     start(&asha, stopped).await.unwrap();
-    t.k.run_action(&asha, "SignBulkSend", stopped, "cancel", json!({})).await.unwrap();
+    t.k.run_action(&asha, "SignBulkSend", stopped, "stop", json!({})).await.unwrap();
     t.maintenance(&acme).await;
     let b = t.get(&asha, "SignBulkSend", stopped).await;
     assert_eq!((b["status"].clone(), made(stopped).await), (json!("Cancelled"), 0));

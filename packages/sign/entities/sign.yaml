@@ -348,7 +348,7 @@
         effect: transactional_action
         returns: {type: object, properties: {status: {type: string, const: Sending}, rows: {type: integer}}}
         completion: "Sending has started: each recipient gets their own request within minutes, a few every minute"
-    - name: cancel
+    - name: stop
       label: Stop
       permission: write
       condition: "doc.status == 'Sending'"
