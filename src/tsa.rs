@@ -48,7 +48,10 @@ pub fn request(digest: &[u8; 32]) -> std::result::Result<(Vec<u8>, Vec<u8>), Str
     nonce[0] |= 0x01;
     let req = Request {
         version: 1,
-        imprint: Imprint { algorithm: AlgorithmIdentifierOwned { oid: ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1"), parameters: None }, digest: OctetString::new(digest.to_vec()).map_err(|e| e.to_string())? },
+        imprint: Imprint {
+            algorithm: AlgorithmIdentifierOwned { oid: ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1"), parameters: None },
+            digest: OctetString::new(digest.to_vec()).map_err(|e| e.to_string())?,
+        },
         nonce: Int::new(&nonce).map_err(|e| e.to_string())?,
         cert_req: true,
     };
@@ -107,9 +110,12 @@ pub(crate) fn children(der: &[u8]) -> std::result::Result<Vec<(u8, &[u8], &[u8])
 fn tst_info(token: &[u8]) -> std::result::Result<TstInfo, String> {
     let bad = |m: String| format!("the time-stamp token cannot be read ({m})");
     // The content of the one element `d` is.
-    let first = |d: &[u8]| -> std::result::Result<Vec<u8>, String> { children(d).and_then(|c| c.first().map(|e| e.1.to_vec()).ok_or_else(|| "empty".to_string())) };
+    let first =
+        |d: &[u8]| -> std::result::Result<Vec<u8>, String> { children(d).and_then(|c| c.first().map(|e| e.1.to_vec()).ok_or_else(|| "empty".to_string())) };
     // The content of the `n`th child of `d`'s content.
-    let nth = |d: &[u8], n: usize| -> std::result::Result<Vec<u8>, String> { children(d).and_then(|c| c.get(n).map(|e| e.1.to_vec()).ok_or_else(|| "too short".to_string())) };
+    let nth = |d: &[u8], n: usize| -> std::result::Result<Vec<u8>, String> {
+        children(d).and_then(|c| c.get(n).map(|e| e.1.to_vec()).ok_or_else(|| "too short".to_string()))
+    };
     let octets = (|| {
         let content_info = first(token)?;
         let signed_data = first(&nth(&content_info, 1)?)?;
@@ -135,7 +141,11 @@ pub async fn stamp(k: &Kernel, sys: &Ctx, connection: &str, digest: &[u8; 32]) -
     let answered = connections::call(k, sys, Some("sign"), &call).await;
     let _ = k.delete_file(sys, file).await;
     let answered = answered?;
-    let token_file = answered.get("token_file").and_then(|v| v.as_str()).and_then(|v| v.parse::<uuid::Uuid>().ok()).ok_or_else(|| Error::Unavailable("the time-stamping authority gave no answer".into()))?;
+    let token_file = answered
+        .get("token_file")
+        .and_then(|v| v.as_str())
+        .and_then(|v| v.parse::<uuid::Uuid>().ok())
+        .ok_or_else(|| Error::Unavailable("the time-stamping authority gave no answer".into()))?;
     let bytes = k.read_file(sys, token_file).await.map(|f| f.2);
     let _ = k.delete_file(sys, token_file).await;
     check(&bytes?, digest, &nonce).map_err(Error::Unavailable)
@@ -155,7 +165,10 @@ mod tests {
         let info = TstInfo {
             version: 1,
             policy: ObjectIdentifier::new_unwrap("1.2.3.4"),
-            imprint: Imprint { algorithm: AlgorithmIdentifierOwned { oid: ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1"), parameters: None }, digest: OctetString::new(digest.to_vec()).unwrap() },
+            imprint: Imprint {
+                algorithm: AlgorithmIdentifierOwned { oid: ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1"), parameters: None },
+                digest: OctetString::new(digest.to_vec()).unwrap(),
+            },
             serial: Int::new(&[1]).unwrap(),
             gen_time: x509_cert::der::asn1::GeneralizedTime::from_unix_duration(std::time::Duration::from_secs(1_800_000_000)).unwrap(),
             accuracy: None,

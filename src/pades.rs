@@ -4,7 +4,7 @@
 //! signature covers every byte of the file but its own `/Contents`, so any later change, an added revision included,
 //! shows. Checking recomputes all of it from the file alone. The CMS structures are written with `der`.
 
-use crate::seal_key::{Hash, Key, SealKey};
+use crate::seal_key::{Hash, SealKey};
 use chrono::{DateTime, Utc};
 use lopdf::{Dictionary, IncrementalDocument, Object, Stream, StringFormat};
 use p256::ecdsa::signature::Verifier;
@@ -60,6 +60,13 @@ struct SignerInfo {
     unsigned_attributes: Option<SetOfVec<Attribute>>,
 }
 
+/// A SET of one signer: there is never more, so nothing is ever ordered.
+impl x509_cert::der::ValueOrd for SignerInfo {
+    fn value_cmp(&self, _other: &Self) -> x509_cert::der::Result<std::cmp::Ordering> {
+        Ok(std::cmp::Ordering::Equal)
+    }
+}
+
 #[derive(Sequence)]
 struct IssuerAndSerial {
     issuer: Name,
@@ -113,7 +120,8 @@ impl Begun {
         let unsigned = match token {
             Some(t) => {
                 let mut set = SetOfVec::new();
-                set.insert(attribute("1.2.840.113549.1.9.16.2.14", Any::from_der(t).map_err(|e| format!("the time-stamp token: {e}"))?)?).map_err(|e| e.to_string())?;
+                set.insert(attribute("1.2.840.113549.1.9.16.2.14", Any::from_der(t).map_err(|e| format!("the time-stamp token: {e}"))?)?)
+                    .map_err(|e| e.to_string())?;
                 Some(set)
             }
             None => None,
@@ -138,7 +146,13 @@ impl Begun {
             .map_err(|e| e.to_string())?;
         let cms = ContentInfo {
             kind: oid("1.2.840.113549.1.7.2"),
-            content: SignedData { version: 1, digest_algorithms: digests, encapsulated: Encapsulated { kind: oid("1.2.840.113549.1.7.1") }, certificates: Some(certs), signer_infos: infos },
+            content: SignedData {
+                version: 1,
+                digest_algorithms: digests,
+                encapsulated: Encapsulated { kind: oid("1.2.840.113549.1.7.1") },
+                certificates: Some(certs),
+                signer_infos: infos,
+            },
         }
         .to_der()
         .map_err(|e| e.to_string())?;
@@ -272,7 +286,10 @@ pub fn begin(pdf: &[u8], seal: &SealKey, trail: &[u8], time: DateTime<Utc>) -> s
     for a in [
         attribute("1.2.840.113549.1.9.3", any(&oid("1.2.840.113549.1.7.1")))?,
         attribute("1.2.840.113549.1.9.4", any(&OctetString::new(covered).map_err(|e| e.to_string())?))?,
-        attribute("1.2.840.113549.1.9.5", any(&UtcTime::from_unix_duration(std::time::Duration::from_secs(time.timestamp().max(0) as u64)).map_err(|e| e.to_string())?))?,
+        attribute(
+            "1.2.840.113549.1.9.5",
+            any(&UtcTime::from_unix_duration(std::time::Duration::from_secs(time.timestamp().max(0) as u64)).map_err(|e| e.to_string())?),
+        )?,
         attribute("1.2.840.113549.1.9.16.2.47", any(&signing_certificate))?,
     ] {
         attributes.insert(a).map_err(|e| e.to_string())?;
@@ -347,7 +364,9 @@ pub fn check(pdf: &[u8]) -> Option<Checked> {
 /// The leading DER element of `bytes` (the rest being padding).
 fn trim_der(bytes: &[u8]) -> Option<&[u8]> {
     let first = *bytes.get(1)?;
-    let total = if first < 0x80 { 2 + first as usize } else {
+    let total = if first < 0x80 {
+        2 + first as usize
+    } else {
         let n = (first & 0x7f) as usize;
         2 + n + bytes.get(2..2 + n)?.iter().fold(0usize, |a, x| (a << 8) | *x as usize)
     };
@@ -364,7 +383,10 @@ fn check_cms(cms: &[u8], before: &[u8], after: &[u8]) -> Checked {
     if digest.as_ref().map(|d| d.as_bytes().to_vec()) != Some(hash.digest(&[before, after])) {
         return bad("the file's bytes no longer match the signature's digest");
     }
-    let Some(cert) = certs.iter().find(|c| c.tbs_certificate.serial_number == signer.issuer_and_serial.serial && c.tbs_certificate.issuer == signer.issuer_and_serial.issuer) else {
+    let Some(cert) = certs
+        .iter()
+        .find(|c| c.tbs_certificate.serial_number == signer.issuer_and_serial.serial && c.tbs_certificate.issuer == signer.issuer_and_serial.issuer)
+    else {
         return bad("the signer's certificate is not in the signature");
     };
     let Ok(spki) = cert.tbs_certificate.subject_public_key_info.to_der() else { return bad("the certificate's key cannot be read") };
@@ -383,7 +405,13 @@ fn check_cms(cms: &[u8], before: &[u8], after: &[u8]) -> Checked {
     if ok.is_none() {
         return bad("the signature does not verify under the certificate in it");
     }
-    let timestamp = signer.unsigned_attributes.as_ref().and_then(|u| u.iter().find(|a| a.oid == oid("1.2.840.113549.1.9.16.2.14"))).and_then(|a| a.values.iter().next()).and_then(|v| v.to_der().ok()).and_then(|t| crate::tsa::time_of(&t).ok());
+    let timestamp = signer
+        .unsigned_attributes
+        .as_ref()
+        .and_then(|u| u.iter().find(|a| a.oid == oid("1.2.840.113549.1.9.16.2.14")))
+        .and_then(|a| a.values.iter().next())
+        .and_then(|v| v.to_der().ok())
+        .and_then(|t| crate::tsa::time_of(&t).ok());
     Checked {
         valid: true,
         problem: None,

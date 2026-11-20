@@ -132,7 +132,8 @@ async fn build(
     let read = |d: &document::DocRef| {
         let (n, file, sha) = (d.n, d.file, d.sha256.clone());
         async move {
-            let bytes = document::bytes(k, sys.tenant, file).await.map_err(|e| Error::invalid(format!("the original PDF of document {n} cannot be read: {e}")))?;
+            let bytes =
+                document::bytes(k, sys.tenant, file).await.map_err(|e| Error::invalid(format!("the original PDF of document {n} cannot be read: {e}")))?;
             if hex::encode(Sha256::digest(&bytes)) != sha {
                 return Err(Error::invalid(format!("the stored original of document {n} no longer matches its SHA-256; it was changed after sending")));
             }
@@ -207,7 +208,15 @@ async fn complete(k: &Kernel, sys: &Ctx, request: Uuid, file: Uuid, extra: &[Ext
     // The further documents, signed, are the audit trail's too, and each is recorded on its row under the same lock.
     for e in extra {
         document::freeze(&mut tx, sys.tenant, e.file, ev).await?;
-        k.set_child_values_tx(sys, &mut tx, "SignRequest", "more_documents", e.row, obj(json!({"sealed_document": format!("/files/{}", e.file), "sealed_sha256": e.sha}))).await?;
+        k.set_child_values_tx(
+            sys,
+            &mut tx,
+            "SignRequest",
+            "more_documents",
+            e.row,
+            obj(json!({"sealed_document": format!("/files/{}", e.file), "sealed_sha256": e.sha})),
+        )
+        .await?;
     }
     let mut patch = json!({"sealed_document": format!("/files/{file}"), "sealed_sha256": sha, "seal_error": null});
     if !old {
@@ -570,7 +579,10 @@ mod tests {
     fn the_certificate_prints_a_custom_consent_only() {
         let doc: Doc = serde_json::from_value(json!({"number": "SIG-1", "title": "T"})).unwrap();
         let line = |c: &Certificate| c.head.iter().find(|(k, _)| k == "Signers agreed to").map(|(_, v)| v.clone());
-        assert_eq!(line(&Certificate::new(&doc, &[], &settings(Some("I accept Acme's terms.")), None, now(), vec![], None)).as_deref(), Some("I accept Acme's terms."));
+        assert_eq!(
+            line(&Certificate::new(&doc, &[], &settings(Some("I accept Acme's terms.")), None, now(), vec![], None)).as_deref(),
+            Some("I accept Acme's terms.")
+        );
         assert_eq!(line(&Certificate::new(&doc, &[], &settings(None), None, now(), vec![], None)), None);
     }
 

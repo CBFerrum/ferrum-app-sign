@@ -108,7 +108,11 @@ async fn allow_embedding(hc: &mut HookCtx<'_>, params: &Value) -> Result<Value> 
     input.insert("page".into(), json!(PAGE));
     input.insert("origins".into(), json!(origins));
     input.insert("note".into(), json!("Set by Sign: Allow Embedding"));
-    let found: Option<Uuid> = sqlx::query_scalar("select id from e_embedding where tenant_id = $1 and page = $2 for update").bind(hc.ctx.tenant).bind(PAGE).fetch_optional(&mut **hc.tx).await?;
+    let found: Option<Uuid> = sqlx::query_scalar("select id from e_embedding where tenant_id = $1 and page = $2 for update")
+        .bind(hc.ctx.tenant)
+        .bind(PAGE)
+        .fetch_optional(&mut **hc.tx)
+        .await?;
     match found {
         Some(id) => hc.kernel.update_tx(&sys, hc.tx, "Embedding", id, input, None).await.map(|_| ())?,
         None => hc.kernel.insert_tx(&sys, hc.tx, "Embedding", input).await.map(|_| ())?,

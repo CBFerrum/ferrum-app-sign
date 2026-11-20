@@ -371,16 +371,8 @@ impl T {
         }
         let (path, query) = path.split_once('?').unwrap_or((path, ""));
         let query: Map<String, Value> = query.split('&').filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), json!(v))).collect();
-        let req = SiteRequest {
-            tenant: t.id,
-            user: user.cloned(),
-            method: method.into(),
-            path: path.into(),
-            query,
-            headers,
-            body,
-            client_ip: "203.0.113.7".into(),
-        };
+        let req =
+            SiteRequest { tenant: t.id, user: user.cloned(), method: method.into(), path: path.into(), query, headers, body, client_ip: "203.0.113.7".into() };
         let resp = self.k.hooks.site("sign").expect("sign site").handle(&self.k, req).await?;
         assert!(resp.headers.iter().any(|(k, v)| k == "cache-control" && v == "no-store"));
         Ok(resp)
@@ -2001,7 +1993,15 @@ async fn wording() {
     let brand = uid(&t.k.insert(&globex.admin, "Brand", obj(json!({"brand_name": "Globex Legal", "primary_color": "#aa3300"}))).await.unwrap());
     let (_, view) = t.view(&globex, &token, None).await.unwrap();
     assert!(view["consent"].is_null(), "no custom sentence: the page words its own");
-    t.k.update(&globex.admin, "SignSettings", settings_id, obj(json!({"brand": brand.to_string(), "consent_text": "  I accept Globex's purchase terms.  "})), None).await.unwrap();
+    t.k.update(
+        &globex.admin,
+        "SignSettings",
+        settings_id,
+        obj(json!({"brand": brand.to_string(), "consent_text": "  I accept Globex's purchase terms.  "})),
+        None,
+    )
+    .await
+    .unwrap();
     let (_, view) = t.view(&globex, &token, None).await.unwrap();
     assert_eq!(view["brand"]["name"], json!("Globex Legal"), "the signing page carries the settings' brand");
     assert_eq!(view["consent"], json!("I accept Globex's purchase terms."), "a custom consent is shown, trimmed");
@@ -2136,7 +2136,16 @@ async fn richer_fields() {
     // Another signer's upload is theirs: this signer cannot sign with it.
     let ok = upload(other, &theirs_id, "theirs.png", png.clone()).await.unwrap();
     let theirs_file: Value = serde_json::from_slice(&ok.body).unwrap();
-    let m = refused(t.sign(&acme, mine, None, answer(values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("5")), (&card_id, theirs_file["file"].clone())]))).await, "invalid");
+    let m = refused(
+        t.sign(
+            &acme,
+            mine,
+            None,
+            answer(values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("5")), (&card_id, theirs_file["file"].clone())])),
+        )
+        .await,
+        "invalid",
+    );
     assert!(m.contains("not the file you uploaded"), "{m}");
     // Replacing it twice more is allowed; a fourth upload is not; the replaced files are gone.
     upload(mine, &card_id, "second.png", png.clone()).await.unwrap();
@@ -2148,14 +2157,24 @@ async fn richer_fields() {
     assert_eq!(t.count(&acme, id, "Attachment Added").await, 4);
 
     // Signing with the right answers completes the request; the values are kept as given.
-    let (status, done) =
-        t.sign(&acme, mine, None, answer(values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Blue")), (&seats_id, json!("07")), (&card_id, third["file"].clone())]))).await.unwrap();
+    let (status, done) = t
+        .sign(
+            &acme,
+            mine,
+            None,
+            answer(values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Blue")), (&seats_id, json!("07")), (&card_id, third["file"].clone())])),
+        )
+        .await
+        .unwrap();
     assert_eq!(status, 200, "{done}");
     let r = t.get(&asha, "SignRequest", id).await;
     let value = |label: &str| r["fields"].as_array().unwrap().iter().find(|f| f["label"] == json!(label)).unwrap()["value"].clone();
     assert_eq!((value("Plan"), value("Colour"), value("Seats")), (json!("Pro"), json!("Blue"), json!("7")), "a number is kept without leading zeros");
     assert_eq!(value("ID card"), third["file"]);
-    let (status, _) = t.sign(&acme, other, None, json!({"consent": true, "signature": {"text": "Omar Other"}, "values": values(&[(&theirs_id, theirs_file["file"].clone())])})).await.unwrap();
+    let (status, _) = t
+        .sign(&acme, other, None, json!({"consent": true, "signature": {"text": "Omar Other"}, "values": values(&[(&theirs_id, theirs_file["file"].clone())])}))
+        .await
+        .unwrap();
     assert_eq!(status, 200);
     let r = t.get(&asha, "SignRequest", id).await;
     assert_eq!(r["status"], json!("Completed"), "{}", r["seal_error"]);
@@ -2212,10 +2231,8 @@ async fn several_documents() {
     refused(t.site(&acme, "GET", &format!("/signing/{token}/document?n=4"), None, vec![]).await, "not found");
 
     let note = field_id(&r, "Note");
-    let (status, done) = t
-        .sign(&acme, &token, None, json!({"consent": true, "signature": {"text": "Cleo Client"}, "values": {note.clone(): "Seen"}}))
-        .await
-        .unwrap();
+    let (status, done) =
+        t.sign(&acme, &token, None, json!({"consent": true, "signature": {"text": "Cleo Client"}, "values": {note.clone(): "Seen"}})).await.unwrap();
     assert_eq!((status, done["request_status"].clone()), (200, json!("Completed")), "{done}");
     let r = t.get(&asha, "SignRequest", id).await;
     let sealed: Vec<(String, String)> = std::iter::once(&r)
@@ -2353,7 +2370,11 @@ async fn bulk() {
     let capped = bulk_of(&asha, (6..=9).map(person).collect()).await;
     start(&asha, capped).await.unwrap();
     t.maintenance(&acme).await;
-    assert_eq!((made(capped).await, t.get(&asha, "SignBulkSend", capped).await["status"].clone()), (0, json!("Sending")), "four were made today: the limit of 2 is reached");
+    assert_eq!(
+        (made(capped).await, t.get(&asha, "SignBulkSend", capped).await["status"].clone()),
+        (0, json!("Sending")),
+        "four were made today: the limit of 2 is reached"
+    );
     t.k.update(&mira, "SignSettings", settings, obj(json!({"bulk_per_day": 6})), None).await.unwrap();
     t.maintenance(&acme).await;
     assert_eq!(made(capped).await, 2, "room for two more");
@@ -2411,17 +2432,63 @@ async fn digital_seal() {
 
     // The audit trail travels inside the file, as the chain has it.
     let doc = lopdf::Document::load_mem(&bytes).expect("the sealed file reads");
-    let names = doc.catalog().unwrap().get(b"Names").and_then(|n| doc.dereference(n)).unwrap().1.as_dict().unwrap().get(b"EmbeddedFiles").and_then(|n| doc.dereference(n)).unwrap().1.as_dict().unwrap().get(b"Names").unwrap().as_array().unwrap().clone();
-    let spec = doc.dereference(&names[1]).unwrap().1.as_dict().unwrap().get(b"EF").and_then(|e| doc.dereference(e)).unwrap().1.as_dict().unwrap().get(b"F").and_then(|f| doc.dereference(f)).unwrap().1.as_stream().unwrap().clone();
+    let names = doc
+        .catalog()
+        .unwrap()
+        .get(b"Names")
+        .and_then(|n| doc.dereference(n))
+        .unwrap()
+        .1
+        .as_dict()
+        .unwrap()
+        .get(b"EmbeddedFiles")
+        .and_then(|n| doc.dereference(n))
+        .unwrap()
+        .1
+        .as_dict()
+        .unwrap()
+        .get(b"Names")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    let spec = doc
+        .dereference(&names[1])
+        .unwrap()
+        .1
+        .as_dict()
+        .unwrap()
+        .get(b"EF")
+        .and_then(|e| doc.dereference(e))
+        .unwrap()
+        .1
+        .as_dict()
+        .unwrap()
+        .get(b"F")
+        .and_then(|f| doc.dereference(f))
+        .unwrap()
+        .1
+        .as_stream()
+        .unwrap()
+        .clone();
     let embedded: Value = serde_json::from_slice(&spec.content).expect("the trail is JSON");
     let events = embedded["events"].as_array().unwrap();
     let kept: Vec<String> = {
         let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
-        let rows = sqlx::query_scalar("select event_hash from e_sign_event where tenant_id = $1 and request = $2 order by seq").bind(acme.id).bind(id).fetch_all(&mut *tx).await.unwrap();
+        let rows = sqlx::query_scalar("select event_hash from e_sign_event where tenant_id = $1 and request = $2 order by seq")
+            .bind(acme.id)
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         rows
     };
-    assert_eq!(events.iter().map(|e| e["event_hash"].as_str().unwrap().to_string()).collect::<Vec<_>>(), kept[..kept.len() - 1].to_vec(), "every event up to the completion, as chained");
+    assert_eq!(
+        events.iter().map(|e| e["event_hash"].as_str().unwrap().to_string()).collect::<Vec<_>>(),
+        kept[..kept.len() - 1].to_vec(),
+        "every event up to the completion, as chained"
+    );
 
     // One changed byte: the request no longer verifies, the file presented is refused.
     let mut changed = bytes.clone();

@@ -589,7 +589,8 @@ pub async fn verify(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Val
         None => None,
     };
     let seal_ok = seal.as_ref().is_none_or(|c| c.valid);
-    let seal = seal.map(|c| json!({"valid": c.valid, "problem": c.problem, "subject": c.subject, "certificate_sha256": c.certificate_sha256, "timestamp": c.timestamp}));
+    let seal = seal
+        .map(|c| json!({"valid": c.valid, "problem": c.problem, "subject": c.subject, "certificate_sha256": c.certificate_sha256, "timestamp": c.timestamp}));
     // The other documents of the request, each checked the same way.
     let mut others = Vec::new();
     for d in document::documents(doc).into_iter().filter(|d| d.n > 1) {

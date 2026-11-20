@@ -147,10 +147,12 @@ impl SealKey {
 /// A self-signed certificate for `key`, good ten years, for signing and non-repudiation only.
 pub(crate) fn self_signed(key: &Key, workspace: &str) -> std::result::Result<Certificate, String> {
     let label: String = workspace.chars().filter(|c| c.is_alphanumeric() || *c == ' ').take(60).collect();
-    let name = Name::from_str(&format!("CN={} Sign seal", if label.trim().is_empty() { "Workspace" } else { label.trim() })).map_err(|e| format!("the certificate's name: {e}"))?;
+    let name = Name::from_str(&format!("CN={} Sign seal", if label.trim().is_empty() { "Workspace" } else { label.trim() }))
+        .map_err(|e| format!("the certificate's name: {e}"))?;
     let alg = AlgorithmIdentifierOwned { oid: key.algorithm(), parameters: None };
     let usage = KeyUsage(KeyUsages::DigitalSignature | KeyUsages::NonRepudiation).to_der().map_err(|e| e.to_string())?;
-    let extension = Extension { extn_id: ObjectIdentifier::new_unwrap("2.5.29.15"), critical: true, extn_value: OctetString::new(usage).map_err(|e| e.to_string())? };
+    let extension =
+        Extension { extn_id: ObjectIdentifier::new_unwrap("2.5.29.15"), critical: true, extn_value: OctetString::new(usage).map_err(|e| e.to_string())? };
     let mut serial: [u8; 16] = rand::random();
     serial[0] = (serial[0] & 0x7f) | 0x01;
     let tbs = x509_cert::TbsCertificate {
@@ -189,7 +191,10 @@ pub fn check(key_pem: &str, certificates_pem: &str) -> std::result::Result<(), S
 
 async fn read(k: &Kernel, tx: &mut Tx, tenant: Uuid) -> Result<Option<(String, Option<String>, bool)>> {
     let row: Option<(Uuid, Option<String>, Option<String>)> =
-        sqlx::query_as("select id, seal_certificate, seal::text from e_sign_settings where tenant_id = $1 limit 1").bind(tenant).fetch_optional(&mut **tx).await?;
+        sqlx::query_as("select id, seal_certificate, seal::text from e_sign_settings where tenant_id = $1 limit 1")
+            .bind(tenant)
+            .fetch_optional(&mut **tx)
+            .await?;
     let Some((id, certificate, seal)) = row else { return Ok(None) };
     let pem = crate::keys::field(k, tx, tenant, "SignSettings", id, "seal_key").await?;
     Ok(pem.map(|p| (p.to_string(), certificate, seal.as_deref() != Some("None"))))
@@ -198,7 +203,8 @@ async fn read(k: &Kernel, tx: &mut Tx, tenant: Uuid) -> Result<Option<(String, O
 /// The seal, or `None` when the workspace chose no seal. The first call makes one, in a transaction of its own committed at
 /// once, so concurrent first seals agree on one key; it is then read back through `tx`.
 pub async fn load(k: &Kernel, tx: &mut Tx, tenant: Uuid) -> Result<Option<SealKey>> {
-    let chosen: Option<String> = sqlx::query_scalar("select seal::text from e_sign_settings where tenant_id = $1 limit 1").bind(tenant).fetch_optional(&mut **tx).await?.flatten();
+    let chosen: Option<String> =
+        sqlx::query_scalar("select seal::text from e_sign_settings where tenant_id = $1 limit 1").bind(tenant).fetch_optional(&mut **tx).await?.flatten();
     if chosen.as_deref() == Some("None") {
         return Ok(None);
     }
@@ -214,7 +220,8 @@ async fn create(k: &Kernel, tenant: Uuid) -> Result<()> {
     let sys = Ctx::system(tenant, k.registry.schema(tenant).await?);
     for _ in 0..3 {
         let mut tx = k.db.tenant_tx(tenant).await?;
-        let id: Option<Uuid> = sqlx::query_scalar("select id from e_sign_settings where tenant_id = $1 limit 1 for update").bind(tenant).fetch_optional(&mut *tx).await?;
+        let id: Option<Uuid> =
+            sqlx::query_scalar("select id from e_sign_settings where tenant_id = $1 limit 1 for update").bind(tenant).fetch_optional(&mut *tx).await?;
         // Under the lock, again: another seal may have made it a moment ago.
         if let Some(id) = id
             && crate::keys::field(k, &mut tx, tenant, "SignSettings", id, "seal_key").await?.is_some()

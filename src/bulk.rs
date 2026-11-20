@@ -192,7 +192,11 @@ async fn send_rows(k: &Kernel, ctx: &Ctx, bulk: Uuid) -> Result<usize> {
                         return Ok(());
                     }
                     k.set_child_values_tx(ctx, &mut tx, "SignBulkSend", "recipients", *row, obj(json!({"status": "Failed", "error": note}))).await?;
-                    let failed: i64 = sqlx::query_scalar("select failed from e_sign_bulk_send where tenant_id = $1 and id = $2").bind(ctx.tenant).bind(bulk).fetch_one(&mut *tx).await?;
+                    let failed: i64 = sqlx::query_scalar("select failed from e_sign_bulk_send where tenant_id = $1 and id = $2")
+                        .bind(ctx.tenant)
+                        .bind(bulk)
+                        .fetch_one(&mut *tx)
+                        .await?;
                     k.set_values_tx(ctx, &mut tx, "SignBulkSend", bulk, obj(json!({"failed": failed + 1}))).await?;
                     tx.commit().await?;
                     Ok(())
@@ -217,37 +221,41 @@ async fn send_row(k: &Kernel, ctx: &Ctx, bulk: Uuid, row_id: Uuid) -> Result<Ste
     let table = child_table(ctx, "SignBulkSend", "recipients")?;
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
     // The bulk send first, then the row: still sending, and this row not made yet (another run may have made it).
-    let head: Option<(String, Option<Uuid>, Option<Uuid>)> = sqlx::query_as("select status, created_by, template from e_sign_bulk_send where tenant_id = $1 and id = $2 for update")
-        .bind(ctx.tenant)
-        .bind(bulk)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let head: Option<(String, Option<Uuid>, Option<Uuid>)> =
+        sqlx::query_as("select status, created_by, template from e_sign_bulk_send where tenant_id = $1 and id = $2 for update")
+            .bind(ctx.tenant)
+            .bind(bulk)
+            .fetch_optional(&mut *tx)
+            .await?;
     let Some((status, Some(creator), Some(template))) = head else {
         tx.rollback().await?;
         return Ok(Step::Skipped);
     };
-    let row: Option<(Option<Uuid>, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!("select request, status from {table} where tenant_id = $1 and id = $2 for update")))
-        .bind(ctx.tenant)
-        .bind(row_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let row: Option<(Option<Uuid>, String)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("select request, status from {table} where tenant_id = $1 and id = $2 for update")))
+            .bind(ctx.tenant)
+            .bind(row_id)
+            .fetch_optional(&mut *tx)
+            .await?;
     if status != "Sending" || !matches!(&row, Some((None, st)) if st == "Waiting") {
         tx.rollback().await?;
         return Ok(Step::Skipped);
     }
     let settings = settings::load(k, ctx, &mut tx).await?;
     // Rolling 24 hours, not the calendar day.
-    let today: i64 = sqlx::query_scalar("select count(*) from e_sign_request where tenant_id = $1 and bulk_send is not null and created_at > now() - interval '24 hours'")
-        .bind(ctx.tenant)
-        .fetch_one(&mut *tx)
-        .await?;
+    let today: i64 =
+        sqlx::query_scalar("select count(*) from e_sign_request where tenant_id = $1 and bulk_send is not null and created_at > now() - interval '24 hours'")
+            .bind(ctx.tenant)
+            .fetch_one(&mut *tx)
+            .await?;
     if today >= settings.bulk_per_day {
         tx.rollback().await?;
         return Ok(Step::Paused);
     }
     let bulk_doc = k.get_tx(ctx, &mut tx, "SignBulkSend", bulk, false).await?;
     let rec = rows(&bulk_doc, "recipients").into_iter().find(|r| id(r, "id") == Some(row_id)).ok_or_else(|| Error::NotFound("recipient".into()))?;
-    let signers: Vec<Value> = people(&rec).map_err(Error::invalid)?.into_iter().map(|(role, name, email)| json!({"role": role, "name": name, "email": email})).collect();
+    let signers: Vec<Value> =
+        people(&rec).map_err(Error::invalid)?.into_iter().map(|(role, name, email)| json!({"role": role, "name": name, "email": email})).collect();
     // As the person who made the bulk send, with the rights they have now.
     let mut who = k.load_ctx(ctx.tenant, creator, None, format!("sign-bulk-{}", Uuid::now_v7())).await?;
     who.made = ferrum_kernel::Made::Job;
@@ -277,17 +285,23 @@ async fn send_row(k: &Kernel, ctx: &Ctx, bulk: Uuid, row_id: Uuid) -> Result<Ste
 /// When no row is waiting any more: the bulk send is done.
 async fn finish(k: &Kernel, ctx: &Ctx, bulk: Uuid, table: &str) -> Result<()> {
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
-    let status: Option<String> = sqlx::query_scalar("select status from e_sign_bulk_send where tenant_id = $1 and id = $2 for update").bind(ctx.tenant).bind(bulk).fetch_optional(&mut *tx).await?;
-    let waiting: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("select count(*) from {table} where tenant_id = $1 and parent_id = $2 and status = 'Waiting'")))
+    let status: Option<String> = sqlx::query_scalar("select status from e_sign_bulk_send where tenant_id = $1 and id = $2 for update")
         .bind(ctx.tenant)
         .bind(bulk)
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
+    let waiting: i64 =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("select count(*) from {table} where tenant_id = $1 and parent_id = $2 and status = 'Waiting'")))
+            .bind(ctx.tenant)
+            .bind(bulk)
+            .fetch_one(&mut *tx)
+            .await?;
     if status.as_deref() != Some("Sending") || waiting > 0 {
         tx.rollback().await?;
         return Ok(());
     }
-    let failed: i64 = sqlx::query_scalar("select failed from e_sign_bulk_send where tenant_id = $1 and id = $2").bind(ctx.tenant).bind(bulk).fetch_one(&mut *tx).await?;
+    let failed: i64 =
+        sqlx::query_scalar("select failed from e_sign_bulk_send where tenant_id = $1 and id = $2").bind(ctx.tenant).bind(bulk).fetch_one(&mut *tx).await?;
     let done = if failed > 0 { "Done With Failures" } else { "Done" };
     k.set_values_tx(ctx, &mut tx, "SignBulkSend", bulk, obj(json!({"status": done}))).await?;
     tx.commit().await?;

@@ -13,24 +13,24 @@
 //!   without one, actions return copyable links and people get in-app notifications.
 
 mod bulk;
-mod pades;
-mod tsa;
 mod document;
 mod envelope;
 mod event;
 mod keys;
 mod notice;
+mod pades;
 mod pdf;
 mod reports;
 mod request;
-mod seal_key;
 mod seal;
+mod seal_key;
 mod settings;
 mod signature;
 mod signing;
 mod site;
 mod template;
 mod token;
+mod tsa;
 mod upkeep;
 
 use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, TimeZone, Utc};

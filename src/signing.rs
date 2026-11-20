@@ -282,7 +282,8 @@ pub async fn view(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Resu
         let r = &o.request;
         let mine = o.my_fields();
         let needs = |t: &str| mine.iter().any(|f| s(f, "field_type") == Some(t));
-        let pages_of = |ps: &[pdf::PageSize]| -> Vec<Value> { ps.iter().enumerate().map(|(i, p)| json!({"page": i + 1, "width": p.width, "height": p.height})).collect() };
+        let pages_of =
+            |ps: &[pdf::PageSize]| -> Vec<Value> { ps.iter().enumerate().map(|(i, p)| json!({"page": i + 1, "width": p.width, "height": p.height})).collect() };
         let pages: Vec<Value> = pages_of(&document::page_sizes(r).unwrap_or_default());
         // Every document of the request: the main one first (`pages` above stays its pages, for pages that know of one).
         let documents: Vec<Value> =
@@ -884,7 +885,8 @@ pub async fn verify_presented(k: &Kernel, tenant: Uuid, bytes: &[u8]) -> Result<
     }
     let signers: Vec<Value> =
         rows(&doc, "signers").iter().map(|r| json!({"name": s(r, "name"), "role": s(r, "role"), "signed_at": s(r, "signed_at")})).collect();
-    let seal = crate::pades::check(bytes).map(|c| json!({"valid": c.valid, "problem": c.problem, "subject": c.subject, "certificate_sha256": c.certificate_sha256, "timestamp": c.timestamp}));
+    let seal = crate::pades::check(bytes)
+        .map(|c| json!({"valid": c.valid, "problem": c.problem, "subject": c.subject, "certificate_sha256": c.certificate_sha256, "timestamp": c.timestamp}));
     if seal.as_ref().is_some_and(|s| s["valid"] == json!(false)) {
         return Ok(json!({"valid": false, "sha256": sha, "seal": seal, "message": "The workspace's digital seal in this file does not verify."}));
     }
@@ -935,9 +937,9 @@ pub async fn attach(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, field
         Gate::Open(v) => v,
         Gate::Gone(m, st) => return Ok(Reply::Gone(m, st)),
     };
-    let (kind, mime) = sniff(bytes).filter(|(kind, _)| kinds.iter().any(|a| a == kind)).ok_or_else(|| {
-        Error::invalid(format!("this field takes {} files; the file is not one", kinds.join(", ")))
-    })?;
+    let (kind, mime) = sniff(bytes)
+        .filter(|(kind, _)| kinds.iter().any(|a| a == kind))
+        .ok_or_else(|| Error::invalid(format!("this field takes {} files; the file is not one", kinds.join(", "))))?;
     let sys = system(k, tenant).await?;
     let clean_name = {
         let n = clean(name, 100);
@@ -965,8 +967,14 @@ pub async fn attach(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, field
             set_signer(k, &sys, &mut tx, doc_id(&o.signer)?, json!({"attachments": Value::Object(all)})).await?;
             let actor = s(&o.signer, "email").unwrap_or_default().to_string();
             let detail = format!("{}: {clean_name} ({size} bytes, SHA-256 {sha})", s(&f, "label").unwrap_or("Attachment"));
-            event::record(k, &sys, &mut tx, &o.request, Entry::new("Attachment Added", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref()).details(detail))
-                .await?;
+            event::record(
+                k,
+                &sys,
+                &mut tx,
+                &o.request,
+                Entry::new("Attachment Added", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref()).details(detail),
+            )
+            .await?;
             tx.commit().await?;
             Ok(replaced)
         }
