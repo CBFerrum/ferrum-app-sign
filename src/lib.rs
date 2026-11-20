@@ -66,6 +66,16 @@ pub fn register(hooks: &mut HookRegistry) {
         .add_site("sign", site);
 }
 
+/// The SHA-256 of the workspace's seal certificate, made if this is the first use; none when the workspace chose no seal.
+/// For checking from outside that one key serves every seal (tests, the operator).
+#[doc(hidden)]
+pub async fn workspace_seal(k: &Kernel, tenant: uuid::Uuid) -> ferrum_kernel::Result<Option<String>> {
+    let mut tx = k.db.tenant_tx(tenant).await?;
+    let found = seal_key::load(k, &mut tx, tenant).await?;
+    tx.commit().await?;
+    found.map(|s| s.certificate_sha256()).transpose()
+}
+
 /// This app's reports.
 pub fn reports() -> Vec<Arc<dyn ReportSource>> {
     vec![Arc::new(reports::SignReports)]

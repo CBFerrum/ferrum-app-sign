@@ -583,6 +583,13 @@ pub async fn verify(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Val
     if problem.is_none() && status(doc) == "Completed" && !completes {
         problem = Some("the trail does not end with the completion".into());
     }
+    // The workspace's digital seal in the sealed file, checked from the file alone (none in files sealed before it existed).
+    let seal = match s(doc, "sealed_document").and_then(document::file_id) {
+        Some(f) => document::bytes(k, ctx.tenant, f).await.ok().and_then(|b| crate::pades::check(&b)),
+        None => None,
+    };
+    let seal_ok = seal.as_ref().is_none_or(|c| c.valid);
+    let seal = seal.map(|c| json!({"valid": c.valid, "problem": c.problem, "subject": c.subject, "certificate_sha256": c.certificate_sha256, "timestamp": c.timestamp}));
     // The other documents of the request, each checked the same way.
     let mut others = Vec::new();
     for d in document::documents(doc).into_iter().filter(|d| d.n > 1) {
@@ -594,12 +601,13 @@ pub async fn verify(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Val
         others.push(json!({"n": d.n, "name": d.name, "original": original, "sealed": sealed}));
     }
     let all_ok = others.iter().all(|o| o["original"]["ok"] == json!(true) && (o["sealed"].is_null() || o["sealed"]["ok"] == json!(true)));
-    let valid = original["ok"] == json!(true) && (sealed.is_null() || sealed["ok"] == json!(true)) && all_ok && problem.is_none();
+    let valid = original["ok"] == json!(true) && (sealed.is_null() || sealed["ok"] == json!(true)) && all_ok && seal_ok && problem.is_none();
     Ok(json!({
         "valid": valid,
         "status": status(doc),
         "original": original,
         "sealed": sealed,
+        "seal": seal,
         "documents": others,
         "audit_trail": {"ok": problem.is_none(), "events": check.events, "head": check.head, "problem": problem},
     }))

@@ -884,8 +884,12 @@ pub async fn verify_presented(k: &Kernel, tenant: Uuid, bytes: &[u8]) -> Result<
     }
     let signers: Vec<Value> =
         rows(&doc, "signers").iter().map(|r| json!({"name": s(r, "name"), "role": s(r, "role"), "signed_at": s(r, "signed_at")})).collect();
+    let seal = crate::pades::check(bytes).map(|c| json!({"valid": c.valid, "problem": c.problem, "subject": c.subject, "certificate_sha256": c.certificate_sha256, "timestamp": c.timestamp}));
+    if seal.as_ref().is_some_and(|s| s["valid"] == json!(false)) {
+        return Ok(json!({"valid": false, "sha256": sha, "seal": seal, "message": "The workspace's digital seal in this file does not verify."}));
+    }
     Ok(json!({
-        "valid": true, "sha256": sha,
+        "valid": true, "sha256": sha, "seal": seal,
         "request": {"number": s(&doc, "number"), "title": s(&doc, "title"), "completed_at": s(&doc, "completed_at"), "signers": signers},
     }))
 }

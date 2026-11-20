@@ -2368,3 +2368,86 @@ async fn bulk() {
     assert_eq!((b["status"].clone(), made(stopped).await), (json!("Cancelled"), 0));
     assert!(b["recipients"].as_array().unwrap().iter().all(|r| r["signers"].is_null() && r["status"] == json!("Waiting")));
 }
+
+#[test]
+fn a_finished_document_carries_the_workspaces_digital_seal() {
+    run(digital_seal());
+}
+
+/// S11-G5: every finished document is signed digitally by the workspace's key (one key per workspace, made once however
+/// many seals start at the same moment); the request's verify and the public check find the seal valid, name who it says it
+/// is, and find it broken by one changed byte; the audit trail travels inside the file; a seal key that does not match its
+/// certificate, or is an RSA key, is refused when saved; choosing no seal gives a file without one.
+async fn digital_seal() {
+    use p256::pkcs8::{EncodePrivateKey, LineEnding};
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
+    let sys = t.sys(&acme);
+    let pdf = contract_pdf("Sealed");
+
+    // One key, made once: two first seals at the same moment get the same certificate.
+    let (a, b) = tokio::join!(ferrum_app_sign::workspace_seal(&t.k, acme.id), ferrum_app_sign::workspace_seal(&t.k, acme.id));
+    let (a, b) = (a.unwrap().expect("a seal"), b.unwrap().expect("a seal"));
+    assert_eq!(a, b, "one key serves both");
+    assert_eq!(ferrum_app_sign::workspace_seal(&t.k, acme.id).await.unwrap(), Some(a.clone()), "and the next call");
+
+    let (id, token) = t.one_signer_request(&asha, "Sealed", &pdf).await;
+    let (status, done) = t.sign(&acme, &token, None, json!({"consent": true, "signature": {"text": "Cleo Client"}})).await.unwrap();
+    assert_eq!((status, done["request_status"].clone()), (200, json!("Completed")), "{done}");
+    let r = t.get(&asha, "SignRequest", id).await;
+    let file: Uuid = r["sealed_document"].as_str().unwrap()[7..].parse().unwrap();
+    let bytes = t.k.read_file(&sys, file).await.unwrap().2;
+    let verdict = t.action(&asha, id, "verify", json!({})).await;
+    assert_eq!(verdict["valid"], json!(true), "{verdict}");
+    assert_eq!(verdict["seal"]["valid"], json!(true), "{verdict}");
+    assert_eq!(verdict["seal"]["certificate_sha256"], json!(a), "the file was sealed with the workspace's key");
+    assert!(verdict["seal"]["subject"].as_str().unwrap().contains("Sign seal"));
+    let presented = t.verify_pdf(&acme, bytes.clone()).await;
+    assert_eq!((presented["valid"].clone(), presented["seal"]["valid"].clone()), (json!(true), json!(true)), "{presented}");
+
+    // The audit trail travels inside the file, as the chain has it.
+    let doc = lopdf::Document::load_mem(&bytes).expect("the sealed file reads");
+    let names = doc.catalog().unwrap().get(b"Names").and_then(|n| doc.dereference(n)).unwrap().1.as_dict().unwrap().get(b"EmbeddedFiles").and_then(|n| doc.dereference(n)).unwrap().1.as_dict().unwrap().get(b"Names").unwrap().as_array().unwrap().clone();
+    let spec = doc.dereference(&names[1]).unwrap().1.as_dict().unwrap().get(b"EF").and_then(|e| doc.dereference(e)).unwrap().1.as_dict().unwrap().get(b"F").and_then(|f| doc.dereference(f)).unwrap().1.as_stream().unwrap().clone();
+    let embedded: Value = serde_json::from_slice(&spec.content).expect("the trail is JSON");
+    let events = embedded["events"].as_array().unwrap();
+    let kept: Vec<String> = {
+        let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+        let rows = sqlx::query_scalar("select event_hash from e_sign_event where tenant_id = $1 and request = $2 order by seq").bind(acme.id).bind(id).fetch_all(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        rows
+    };
+    assert_eq!(events.iter().map(|e| e["event_hash"].as_str().unwrap().to_string()).collect::<Vec<_>>(), kept[..kept.len() - 1].to_vec(), "every event up to the completion, as chained");
+
+    // One changed byte: the request no longer verifies, the file presented is refused.
+    let mut changed = bytes.clone();
+    let at = changed.len() / 3;
+    changed[at] ^= 0x01;
+    assert_eq!(t.verify_pdf(&acme, changed).await["valid"], json!(false));
+    let kept_bytes = t.store.tamper(file);
+    let verdict = t.action(&asha, id, "verify", json!({})).await;
+    assert_eq!((verdict["valid"].clone(), verdict["seal"]["valid"].clone()), (json!(false), json!(false)), "{verdict}");
+    t.store.restore(file, kept_bytes);
+
+    // A key set in Sign Settings: it must be one of the two curves and match its certificate; nothing changes when refused.
+    let settings = uid(&t.list(&mira, "SignSettings", json!({})).await[0]);
+    let certificate = t.get(&mira, "SignSettings", settings).await["seal_certificate"].as_str().unwrap().to_string();
+    let foreign = p256::SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng).to_pkcs8_pem(LineEnding::LF).unwrap().to_string();
+    let m = refused(t.k.update(&mira, "SignSettings", settings, obj(json!({"seal_key": foreign, "seal_certificate": certificate})), None).await, "invalid");
+    assert!(m.contains("not for the seal key"), "{m}");
+    let rsa = "-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAu7vjTXgGDKrVZyeX\n-----END PRIVATE KEY-----\n";
+    let m = refused(t.k.update(&mira, "SignSettings", settings, obj(json!({"seal_key": rsa, "seal_certificate": certificate})), None).await, "invalid");
+    assert!(m.contains("RSA keys are not accepted"), "{m}");
+    refused(t.k.update(&mira, "SignSettings", settings, obj(json!({"seal_key": foreign})), None).await, "invalid");
+    assert_eq!(ferrum_app_sign::workspace_seal(&t.k, acme.id).await.unwrap(), Some(a), "the seal is as it was");
+
+    // No seal chosen: the file is as it was before, signed by nobody.
+    t.k.update(&mira, "SignSettings", settings, obj(json!({"seal": "None"})), None).await.unwrap();
+    assert_eq!(ferrum_app_sign::workspace_seal(&t.k, acme.id).await.unwrap(), None);
+    let (plain, token) = t.one_signer_request(&asha, "Not sealed", &pdf).await;
+    t.sign(&acme, &token, None, json!({"consent": true, "signature": {"text": "Cleo Client"}})).await.unwrap();
+    let verdict = t.action(&asha, plain, "verify", json!({})).await;
+    assert_eq!((verdict["valid"].clone(), verdict["seal"].clone()), (json!(true), Value::Null), "{verdict}");
+}
