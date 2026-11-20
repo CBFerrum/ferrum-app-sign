@@ -35,7 +35,7 @@
   kind: child
   fields:
     - {name: role, type: data, required: true, max_length: 60, in_list: true, description: "The signer role that fills this field"}
-    - {name: field_type, type: select, label: Type, required: true, default: Signature, options: [Signature, Initials, Date Signed, Name, Text, Checkbox], in_list: true}
+    - {name: field_type, type: select, label: Type, required: true, default: Signature, options: [Signature, Initials, Date Signed, Name, Text, Checkbox, Dropdown, Radio, Number, Attachment], in_list: true}
     - {name: label, type: data, max_length: 100, in_list: true, description: "Shown to the signer, e.g. Company name"}
     - {name: page, type: int, required: true, default: 1, min: 1, max: 1000, in_list: true}
     - {name: x, type: decimal, required: true, min: 0, max: 14400, in_list: true, description: "Points (1/72 inch) from the left edge of the page as displayed"}
@@ -43,7 +43,13 @@
     - {name: width, type: decimal, required: true, min: 4, max: 14400, in_list: true}
     - {name: height, type: decimal, required: true, min: 4, max: 14400, in_list: true}
     - {name: required, type: check, default: true, in_list: true}
-    - {name: value, type: text, read_only: true, no_copy: true, description: "What the signer entered (name, date, text, Yes/No; signatures are kept on the signer)"}
+    - {name: options, type: json, description: "Dropdown, Radio: the choices, a list of 1 to 50 distinct texts of at most 100 characters"}
+    - {name: option_boxes, type: json, description: "Radio: one box per choice, [[x, y, width, height], ...] in points on the field's page, in the order of the choices"}
+    - {name: min_value, type: data, max_length: 40, description: "Number: the smallest value allowed"}
+    - {name: max_value, type: data, max_length: 40, description: "Number: the largest value allowed"}
+    - {name: decimals, type: int, min: 0, max: 6, description: "Number: places after the point allowed (default 0)"}
+    - {name: accept, type: data, max_length: 100, description: "Attachment: the kinds of file allowed, any of pdf, png, jpg separated by commas (default all three); at most 10 MB"}
+    - {name: value, type: text, read_only: true, no_copy: true, description: "What the signer entered (name, date, text, Yes/No, a choice, a number, an attachment's file; signatures are kept on the signer)"}
 
 - name: SignTemplate
   label: Sign Template
@@ -129,6 +135,7 @@
     - {name: locked_until, type: datetime, read_only: true, hidden: true, no_copy: true}
     - {name: submission_hash, type: data, read_only: true, hidden: true, no_copy: true}
     - {name: devices, type: json, read_only: true, hidden: true, no_copy: true, description: "Keyed hashes of the devices that opened the link (the last 20): a new one is in the trail"}
+    - {name: attachments, type: json, read_only: true, no_copy: true, description: "Attachment fields: {field id: {file, name, size, sha256, uploads}}, what this signer uploaded"}
 
 - name: SignRequest
   label: Sign Request
@@ -257,7 +264,7 @@
     - {name: request, type: link, to: SignRequest, required: true, on_delete: cascade, in_list: true, in_filter: true}
     - {name: seq, type: int, label: No., required: true, in_list: true}
     - {name: event, type: select, required: true, in_list: true, in_filter: true,
-       options: [Sent, Viewed, Signed, Declined, Reminded, Resent, Corrected, Access Denied, Voided, Expired, Completed, Code Sent, Identity Verified, Reassigned, Not Needed, Link Issued, Sealed, Seal Failed]}
+       options: [Sent, Viewed, Signed, Declined, Reminded, Resent, Corrected, Access Denied, Voided, Expired, Completed, Code Sent, Identity Verified, Reassigned, Not Needed, Link Issued, Sealed, Seal Failed, Attachment Added]}
     - {name: occurred_at, type: datetime, label: Time, required: true, in_list: true}
     - {name: role, type: data, max_length: 60}
     - {name: signer_name, type: data, max_length: 140}

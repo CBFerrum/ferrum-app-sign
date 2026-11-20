@@ -19,6 +19,14 @@ export interface Box extends Rect {
   label: string;
   page: number;
   required: boolean;
+  /** Dropdown, Radio: the choices. */
+  options?: string[];
+  /** Number: the bounds (text, empty for none) and the places allowed. */
+  min_value?: string;
+  max_value?: string;
+  decimals?: number;
+  /** Attachment: the kinds of file, `pdf,png,jpg` (empty: all three). */
+  accept?: string;
 }
 
 export const MIN_SIZE = 4;
@@ -31,7 +39,18 @@ export const KINDS: { type: FieldType; label: string; hint: string; size: [numbe
   { type: "Name", get label() { return tr("Name"); }, get hint() { return tr("Filled in with their name"); }, size: [160, 22] },
   { type: "Text", get label() { return tr("Text"); }, get hint() { return tr("A line they type"); }, size: [160, 22] },
   { type: "Checkbox", get label() { return tr("Checkbox"); }, get hint() { return tr("A box they tick"); }, size: [18, 18] },
+  { type: "Dropdown", get label() { return tr("Dropdown"); }, get hint() { return tr("They pick one of your choices"); }, size: [160, 22] },
+  { type: "Radio", get label() { return tr("Choice boxes"); }, get hint() { return tr("One box per choice; they tick one"); }, size: [160, 18] },
+  { type: "Number", get label() { return tr("Number"); }, get hint() { return tr("A number, within the bounds you set"); }, size: [96, 22] },
+  { type: "Attachment", get label() { return tr("Attachment"); }, get hint() { return tr("They upload a PDF or an image"); }, size: [160, 28] },
 ];
+
+/** The boxes of a Radio's choices: squares side by side along the field's box, one per choice. */
+export function radioBoxes(b: Rect, n: number): number[][] {
+  const side = Math.max(MIN_SIZE, Math.min(b.height, 14));
+  const step = n > 0 ? b.width / n : 0;
+  return Array.from({ length: n }, (_, i) => [whole(b.x + i * step), whole(b.y), whole(side), whole(side)]);
+}
 
 export const kindOf = (t: FieldType) => KINDS.find((k) => k.type === t) ?? KINDS[0];
 
@@ -173,6 +192,11 @@ export const toBoxes = (rows: FieldRow[]): Box[] =>
     width: num(r.width, 100),
     height: num(r.height, 30),
     required: r.required !== false,
+    ...(r.options ? { options: r.options } : {}),
+    ...(r.min_value ? { min_value: r.min_value } : {}),
+    ...(r.max_value ? { max_value: r.max_value } : {}),
+    ...(r.decimals ? { decimals: r.decimals } : {}),
+    ...(r.accept ? { accept: r.accept } : {}),
   }));
 
 /** The rows to save: decimals as strings, as the API wants them. */
@@ -188,6 +212,10 @@ export const toRows = (boxes: Box[]) =>
     width: String(whole(b.width)),
     height: String(whole(b.height)),
     required: b.required,
+    ...(b.field_type === "Dropdown" || b.field_type === "Radio" ? { options: b.options ?? [] } : {}),
+    ...(b.field_type === "Radio" ? { option_boxes: radioBoxes(b, (b.options ?? []).length) } : {}),
+    ...(b.field_type === "Number" ? { min_value: b.min_value?.trim() || null, max_value: b.max_value?.trim() || null, decimals: b.decimals ?? 0 } : {}),
+    ...(b.field_type === "Attachment" ? { accept: b.accept?.trim() || null } : {}),
   }));
 
 /** The same boxes, as far as saving is concerned. */

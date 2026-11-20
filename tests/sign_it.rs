@@ -2026,3 +2026,133 @@ async fn wording() {
     deliver().await;
     assert!(sent_mail().iter().any(|m| m.1 == "Nudge: Second Order"), "the workspace's wording: {:?}", sent_mail().iter().map(|m| &m.1).collect::<Vec<_>>());
 }
+
+#[test]
+fn choices_numbers_and_attachments_are_filled_in_and_checked() {
+    run(richer_fields());
+}
+
+fn choice(role: &str, kind: &str, label: &str, y: i64, extra: Value) -> Value {
+    let mut f = field(role, kind, label, 1, 72, y, 150, 20);
+    for (k, v) in extra.as_object().unwrap() {
+        f[k] = v.clone();
+    }
+    f
+}
+
+/// S11-G2: Dropdown, Radio, Number and Attachment fields. A draft refuses a field without what it needs; the signer's
+/// answer must be one of the choices, a number within its places and bounds; an upload is checked by its bytes against
+/// the field's kinds, is the signer's own and no one else's, at most three times, and a stranger's link stores nothing.
+async fn richer_fields() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let pdf = contract_pdf("Fields");
+    let png: Vec<u8> = b"\x89PNG\r\n\x1a\n-not really an image-".to_vec();
+    let draft = |fields: Vec<Value>| {
+        json!({"title": "Fields", "signing_mode": "Parallel", "fields": fields,
+            "signers": [{"role": "Client", "name": "Cleo", "email": "cleo@client.test"}, {"role": "Other", "name": "Omar", "email": "omar@client.test"}]})
+    };
+    // The values of a submission, by field id.
+    let values = |pairs: &[(&String, Value)]| Value::Object(pairs.iter().map(|(k, v)| ((*k).clone(), v.clone())).collect());
+    let plan = choice("Client", "Dropdown", "Plan", 500, json!({"options": ["Basic", "Pro"]}));
+    let colour = choice("Client", "Radio", "Colour", 460, json!({"options": ["Red", "Blue"], "option_boxes": [[72, 460, 14, 14], [120, 460, 14, 14]]}));
+    let seats = choice("Client", "Number", "Seats", 420, json!({"min_value": "1", "max_value": "10", "decimals": 0}));
+    let card = choice("Client", "Attachment", "ID card", 380, json!({"accept": "pdf,png"}));
+    let theirs = choice("Other", "Attachment", "Their ID", 340, json!({}));
+    let mark = field("Client", "Signature", "C", 1, 72, 600, 200, 50);
+
+    // A draft refuses a field without what it needs.
+    for (bad, why) in [
+        (choice("Client", "Dropdown", "Plan", 500, json!({})), "choices"),
+        (choice("Client", "Dropdown", "Plan", 500, json!({"options": ["A", "a"]})), "same"),
+        (choice("Client", "Radio", "Colour", 460, json!({"options": ["Red", "Blue"], "option_boxes": [[72, 460, 14, 14]]})), "one box"),
+        (choice("Client", "Radio", "Colour", 460, json!({"options": ["Red"], "option_boxes": [[72, 2000, 14, 14]]})), "inside the page"),
+        (choice("Client", "Number", "Seats", 420, json!({"min_value": "5", "max_value": "2"})), "larger"),
+        (choice("Client", "Number", "Seats", 420, json!({"min_value": "five"})), "not a number"),
+        (choice("Client", "Attachment", "ID", 380, json!({"accept": "pdf,exe"})), "list kinds"),
+    ] {
+        let mut d = draft(vec![bad]);
+        d["document"] = json!(t.upload(&asha, "f.pdf", &pdf).await);
+        let m = refused(t.k.insert(&asha, "SignRequest", obj(d)).await, "invalid");
+        assert!(m.contains(why), "{why}: {m}");
+    }
+    let mut d = draft(vec![plan, colour, seats, card, theirs, mark, field("Other", "Signature", "O", 1, 320, 600, 200, 50)]);
+    d["document"] = json!(t.upload(&asha, "f.pdf", &pdf).await);
+    let id = uid(&t.k.insert(&asha, "SignRequest", obj(d)).await.unwrap());
+    let sent = t.action(&asha, id, "send", json!({})).await;
+    let r = t.get(&asha, "SignRequest", id).await;
+    let link = |role: &str| token_of(sent["signers"].as_array().unwrap().iter().find(|l| l["role"] == json!(role)).unwrap()["url"].as_str().unwrap());
+    let (mine, other) = (&link("Client"), &link("Other"));
+    let (plan_id, colour_id, seats_id, card_id, theirs_id) =
+        (field_id(&r, "Plan"), field_id(&r, "Colour"), field_id(&r, "Seats"), field_id(&r, "ID card"), field_id(&r, "Their ID"));
+
+    // What the page is told of each field.
+    let (_, view) = t.view(&acme, mine, None).await.unwrap();
+    let f = |label: &str| view["fields"].as_array().unwrap().iter().find(|f| f["label"] == json!(label)).unwrap().clone();
+    assert_eq!(f("Plan")["options"], json!(["Basic", "Pro"]));
+    assert_eq!(f("Colour")["option_boxes"].as_array().unwrap().len(), 2);
+    assert_eq!((f("Seats")["max_value"].clone(), f("Seats")["decimals"].clone()), (json!("10"), json!(0)));
+    assert_eq!((f("ID card")["accept"].clone(), f("ID card")["uploaded"].clone()), (json!(["pdf", "png"]), Value::Null));
+    assert!(view["fields"].as_array().unwrap().iter().all(|f| f["label"] != json!("Their ID")), "another role's field is not shown");
+
+    // Answers: each wrong one is refused with its reason, nothing is signed.
+    let ink = json!({"text": "Cleo Client"});
+    let answer = |values: Value| json!({"consent": true, "signature": ink, "values": values});
+    let tries = [
+        (json!({}), "choose one"),
+        (values(&[(&plan_id, json!("Gold")), (&colour_id, json!("Red")), (&seats_id, json!("5"))]), "not one of the choices"),
+        (values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("11"))]), "at most 10"),
+        (values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("2.5"))]), "whole number"),
+        (values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("many"))]), "must be a number"),
+        (values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("5"))]), "upload a file"),
+    ];
+    for (values, why) in tries {
+        let m = refused(t.sign(&acme, mine, None, answer(values)).await, "invalid");
+        assert!(m.contains(why), "{why}: {m}");
+    }
+
+    // Uploads: the bytes decide, not the name; the field's kinds; the signer's own; three at most; a stranger stores nothing.
+    let upload = |token: &str, field: &str, name: &'static str, bytes: Vec<u8>| {
+        let (t, acme) = (&t, &acme);
+        let (token, field) = (token.to_string(), field.to_string());
+        async move { t.site_with(acme, "POST", &format!("/signing/{token}/attachments/{field}"), &[("x-file-name", name)], bytes).await }
+    };
+    let files = || t.scalar0::<i64>(&acme, "select count(*) from file_object");
+    let before = files().await;
+    refused(upload(mine, &card_id, "id.pdf", b"MZ\x90\x00 an executable named .pdf".to_vec()).await, "invalid");
+    refused(upload(mine, &card_id, "id.jpg", b"\xFF\xD8\xFF\xE0 a jpeg the field does not take".to_vec()).await, "invalid");
+    refused(upload(&"A".repeat(43), &card_id, "id.png", png.clone()).await, "not found");
+    refused(upload(mine, &plan_id, "id.png", png.clone()).await, "not found");
+    assert_eq!(files().await, before, "a refused upload leaves no file behind");
+    let ok = upload(mine, &card_id, "../my id.png", png.clone()).await.unwrap();
+    assert_eq!(ok.status, 200);
+    let first: Value = serde_json::from_slice(&ok.body).unwrap();
+    assert!(!first["name"].as_str().unwrap().contains('/'), "path characters are not kept: {first}");
+    // Another signer's upload is theirs: this signer cannot sign with it.
+    let ok = upload(other, &theirs_id, "theirs.png", png.clone()).await.unwrap();
+    let theirs_file: Value = serde_json::from_slice(&ok.body).unwrap();
+    let m = refused(t.sign(&acme, mine, None, answer(values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("5")), (&card_id, theirs_file["file"].clone())]))).await, "invalid");
+    assert!(m.contains("not the file you uploaded"), "{m}");
+    // Replacing it twice more is allowed; a fourth upload is not; the replaced files are gone.
+    upload(mine, &card_id, "second.png", png.clone()).await.unwrap();
+    let third = upload(mine, &card_id, "third.png", png.clone()).await.unwrap();
+    let third: Value = serde_json::from_slice(&third.body).unwrap();
+    let m = refused(upload(mine, &card_id, "fourth.png", png.clone()).await, "invalid");
+    assert!(m.contains("too many"), "{m}");
+    assert_eq!(files().await, before + 2, "one file per field is kept: the signer's last and the other signer's");
+    assert_eq!(t.count(&acme, id, "Attachment Added").await, 4);
+
+    // Signing with the right answers completes the request; the values are kept as given.
+    let (status, done) =
+        t.sign(&acme, mine, None, answer(values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Blue")), (&seats_id, json!("07")), (&card_id, third["file"].clone())]))).await.unwrap();
+    assert_eq!(status, 200, "{done}");
+    let r = t.get(&asha, "SignRequest", id).await;
+    let value = |label: &str| r["fields"].as_array().unwrap().iter().find(|f| f["label"] == json!(label)).unwrap()["value"].clone();
+    assert_eq!((value("Plan"), value("Colour"), value("Seats")), (json!("Pro"), json!("Blue"), json!("7")), "a number is kept without leading zeros");
+    assert_eq!(value("ID card"), third["file"]);
+    let (status, _) = t.sign(&acme, other, None, json!({"consent": true, "signature": {"text": "Omar Other"}, "values": values(&[(&theirs_id, theirs_file["file"].clone())])})).await.unwrap();
+    assert_eq!(status, 200);
+    let r = t.get(&asha, "SignRequest", id).await;
+    assert_eq!(r["status"], json!("Completed"), "{}", r["seal_error"]);
+}

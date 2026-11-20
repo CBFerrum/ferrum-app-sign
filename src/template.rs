@@ -99,7 +99,7 @@ async fn create_request(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Resu
         .iter()
         .map(|f| {
             let mut row = Map::new();
-            for k in ["role", "field_type", "label", "page", "x", "y", "width", "height", "required"] {
+            for k in ["role", "field_type", "label", "page", "x", "y", "width", "height", "required", "options", "option_boxes", "min_value", "max_value", "decimals", "accept"] {
                 row.insert(k.into(), f.get(k).cloned().unwrap_or(Value::Null));
             }
             Value::Object(row)

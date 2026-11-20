@@ -485,6 +485,35 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
             <input id="ins-label" className="input" value={b.label} maxLength={100} onChange={(e) => onChange({ label: e.target.value })} />
           </Field>
         )}
+        {(b.field_type === "Dropdown" || b.field_type === "Radio") && (
+          <Field label={t("Choices")} htmlFor="ins-options" hint={t("One per line, at most 50.")}>
+            <textarea
+              id="ins-options"
+              className="input"
+              rows={4}
+              value={(b.options ?? []).join("\n")}
+              onChange={(e) => onChange({ options: e.target.value.split("\n").slice(0, 50) })}
+            />
+          </Field>
+        )}
+        {b.field_type === "Number" && (
+          <div className="form-grid" style={{ "--cols": 3, gap: "8px 12px" } as CSSProperties}>
+            <Field label={t("Smallest")} htmlFor="ins-min">
+              <input id="ins-min" className="input num" inputMode="decimal" maxLength={40} value={b.min_value ?? ""} onChange={(e) => onChange({ min_value: e.target.value })} />
+            </Field>
+            <Field label={t("Largest")} htmlFor="ins-max">
+              <input id="ins-max" className="input num" inputMode="decimal" maxLength={40} value={b.max_value ?? ""} onChange={(e) => onChange({ max_value: e.target.value })} />
+            </Field>
+            <Field label={t("Places")} htmlFor="ins-places">
+              <input id="ins-places" className="input num" type="number" min={0} max={6} value={b.decimals ?? 0} onChange={(e) => onChange({ decimals: Math.min(Math.max(Math.round(Number(e.target.value) || 0), 0), 6) })} />
+            </Field>
+          </div>
+        )}
+        {b.field_type === "Attachment" && (
+          <Field label={t("Kinds of file")} htmlFor="ins-accept" hint={t("pdf, png, jpg; empty for all three.")}>
+            <input id="ins-accept" className="input" maxLength={100} value={b.accept ?? ""} onChange={(e) => onChange({ accept: e.target.value })} />
+          </Field>
+        )}
         {!auto && (
           <label className="check-field">
             <input type="checkbox" checked={b.required} onChange={(e) => onChange({ required: e.target.checked })} />

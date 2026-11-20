@@ -171,6 +171,7 @@ export function boxCounts(boxes: Box[], role: string): string {
     [n("Date Signed") + n("Name"), "automatic"],
     [n("Text"), "text"],
     [n("Checkbox"), "checkbox"],
+    [n("Dropdown") + n("Radio") + n("Number") + n("Attachment"), "answer"],
   ] as const;
   return parts
     .filter(([c]) => c > 0)

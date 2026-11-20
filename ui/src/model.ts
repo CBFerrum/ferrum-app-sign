@@ -42,6 +42,12 @@ export interface FieldRow {
   height: number | string;
   required?: boolean;
   value?: string | null;
+  options?: string[] | null;
+  option_boxes?: number[][] | null;
+  min_value?: string | null;
+  max_value?: string | null;
+  decimals?: number | null;
+  accept?: string | null;
 }
 
 export interface SignRequest {

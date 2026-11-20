@@ -6,7 +6,7 @@
 // every box a button.
 
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Ban, Check, CircleAlert, Clock, Copy, Download, Ellipsis, FileText, Info, Link2Off, PenLine, Signature } from "lucide-react";
+import { Ban, Check, CircleAlert, Clock, Copy, Download, Ellipsis, FileText, Info, Link2Off, Paperclip, PenLine, Signature } from "lucide-react";
 import { bootstrap, saveBlob, t as tr, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, Dialog, Field, Menu, MenuItem, Spinner, toast, useShellTitle, placed } from "@ferrum/kit";
 import { copyText } from "./clipboard";
@@ -52,6 +52,10 @@ const LABEL: Record<FieldType, string> = {
   get Name() { return tr("Name"); },
   get Text() { return tr("Text"); },
   get Checkbox() { return tr("Tick"); },
+  get Dropdown() { return tr("Choose"); },
+  get Radio() { return tr("Choose"); },
+  get Number() { return tr("Number"); },
+  get Attachment() { return tr("Attach a file"); },
 };
 
 const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -326,6 +330,10 @@ export function Ready({
   const [pending, setPending] = useState<Mark | null>(null);
   const [text, setText] = useState("");
   const [agreed, setAgreed] = useState(false);
+  /** What each Attachment field was given: the file's name as uploaded (the value itself is the file's id). */
+  const [names, setNames] = useState<Record<string, string>>(() => Object.fromEntries(fields.filter((f) => f.uploaded?.name).map((f) => [f.id, f.uploaded?.name ?? ""])));
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [problems, setProblems] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -367,8 +375,9 @@ export function Ready({
     if (t.kind === "signature" || t.kind === "initials") {
       setPending(null);
       setDialog({ kind: "mark", which: t.kind });
-    } else if (t.kind === "text") {
+    } else if (t.kind === "text" || t.kind === "choice" || t.kind === "number" || t.kind === "file") {
       setText(typeof entry.values[t.key] === "string" ? (entry.values[t.key] as string) : "");
+      setUploadError(null);
       setDialog({ kind: "text", key: t.key });
     } else {
       commit((e) => ({ ...e, values: { ...e.values, [t.key]: e.values[t.key] !== true } }), t.key);
@@ -378,6 +387,25 @@ export function Ready({
   const primary = () => {
     if (target) activate(target);
     else setDialog({ kind: "review" });
+  };
+
+  /** Sends the chosen file to the field; what comes back is the file's id, kept as the field's answer. */
+  const upload = async (task: Task, file: File) => {
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const r = await call(`/attachments/${enc(task.key)}`, { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-File-Name": enc(file.name) }, body: file });
+      const body = await r.json().catch(() => null);
+      if (r.ok && typeof body?.file === "string") {
+        setText(body.file);
+        setNames((n) => ({ ...n, [task.key]: typeof body.name === "string" ? body.name : file.name }));
+      } else if (r.status === 404 || r.status === 410) onChange(classify(r.status, body, hasCode));
+      else setUploadError(sentence(body?.fields?.[0]?.message ?? body?.message ?? "") || tr("Something went wrong ({status}).", { status: r.status }));
+    } catch {
+      setUploadError(offline());
+    } finally {
+      setUploading(false);
+    }
   };
 
   const submit = async () => {
@@ -503,7 +531,7 @@ export function Ready({
                 {here.map((f) => {
                   const task = tasks.find((t) => t.fields.some((x) => x.id === f.id));
                   return (
-                    <Box key={f.id} field={f} size={size} state={boxState(f, tasks, entry, target?.key ?? null)} entry={entry} name={name} task={task} problem={problems[task?.key ?? ""]} onActivate={activate} />
+                    <Box key={f.id} field={f} size={size} state={boxState(f, tasks, entry, target?.key ?? null)} entry={entry} name={name} names={names} task={task} problem={problems[task?.key ?? ""]} onActivate={activate} />
                   );
                 })}
               </Sheet>
@@ -652,7 +680,7 @@ export function Ready({
         footer={
           <>
             <Button onClick={() => setDialog(null)}>{tr("Cancel")}</Button>
-            <Button type="submit" form="sg-text-form" variant="primary" disabled={textTask?.required && !text.trim()}>
+            <Button type="submit" form="sg-text-form" variant="primary" disabled={(textTask?.required && !text.trim()) || uploading}>
               {tr("Save")}
             </Button>
           </>
@@ -665,8 +693,46 @@ export function Ready({
             if (textTask) commit((en) => ({ ...en, values: { ...en.values, [textTask.key]: text.trim() } }), textTask.key);
           }}
         >
-          <Field label={textTask?.label ?? ""} htmlFor="sg-text" required={textTask?.required} error={textTask ? problems[textTask.key] : undefined} hint={textTask?.required ? undefined : tr("Optional")}>
-            <input id="sg-text" className="input" maxLength={500} autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
+          <Field label={textTask?.label ?? ""} htmlFor="sg-text" required={textTask?.required} error={textTask ? uploadError ?? problems[textTask.key] : undefined} hint={textTask?.required ? undefined : tr("Optional")}>
+            {textTask?.kind === "choice" && textTask.fields[0].field_type === "Radio" ? (
+              <div role="radiogroup" aria-label={textTask.label} className="stack" style={{ gap: 6 }}>
+                {(textTask.fields[0].options ?? []).map((o) => (
+                  <label key={o} className="sg-consent">
+                    <input type="radio" name="sg-choice" checked={text === o} onChange={() => setText(o)} />
+                    <span>{isolate(o)}</span>
+                  </label>
+                ))}
+              </div>
+            ) : textTask?.kind === "choice" ? (
+              <select id="sg-text" className="input" value={text} onChange={(e) => setText(e.target.value)}>
+                <option value="">{tr("Choose…")}</option>
+                {(textTask.fields[0].options ?? []).map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            ) : textTask?.kind === "number" ? (
+              <input id="sg-text" className="input" inputMode="decimal" maxLength={40} autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
+            ) : textTask?.kind === "file" ? (
+              <div className="stack" style={{ gap: 6 }}>
+                <input
+                  id="sg-text"
+                  type="file"
+                  className="input"
+                  disabled={uploading}
+                  accept={(textTask.fields[0].accept ?? []).map((k) => (k === "pdf" ? "application/pdf" : k === "png" ? "image/png" : "image/jpeg")).join(",")}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f && textTask) void upload(textTask, f);
+                  }}
+                />
+                {text && names[textTask.key] && <span className="muted">{tr("Uploaded: {name}", { name: names[textTask.key] })}</span>}
+                {uploading && <Spinner />}
+              </div>
+            ) : (
+              <input id="sg-text" className="input" maxLength={500} autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
+            )}
           </Field>
         </form>
       </Dialog>
@@ -764,6 +830,7 @@ function Box({
   state,
   entry,
   name,
+  names,
   task,
   problem,
   onActivate,
@@ -773,6 +840,7 @@ function Box({
   state: ReturnType<typeof boxState>;
   entry: Entry;
   name: string;
+  names: Record<string, string>;
   task: Task | undefined;
   problem?: string;
   onActivate: (t: Task) => void;
@@ -780,6 +848,7 @@ function Box({
   const style = boxStyle(f, size);
   const word = f.label || LABEL[f.field_type];
   const text = task?.kind === "text" && typeof entry.values[task.key] === "string" ? (entry.values[task.key] as string) : "";
+  const answer = task && typeof entry.values[task.key] === "string" ? (entry.values[task.key] as string) : "";
   const mark = f.field_type === "Signature" ? entry.signature : f.field_type === "Initials" ? entry.initials : null;
   let content: ReactNode;
   switch (f.field_type) {
@@ -806,6 +875,19 @@ function Box({
       break;
     case "Checkbox":
       content = state === "done" ? <Check size="1.2em" aria-hidden="true" /> : <span className="sg-tick" aria-hidden="true" />;
+      break;
+    case "Dropdown":
+    case "Radio":
+    case "Number":
+      content = <span className="sg-box-text">{answer || word}</span>;
+      break;
+    case "Attachment":
+      content = (
+        <>
+          <Paperclip size="1.1em" aria-hidden="true" />
+          <span className="sg-box-text">{answer ? names[f.id] || tr("Attached") : word}</span>
+        </>
+      );
       break;
   }
   const status = state === "auto" ? tr("filled in for you") : state === "done" ? "done" : f.required ? "required" : "optional";

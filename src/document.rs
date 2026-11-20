@@ -6,7 +6,7 @@ use crate::pdf::{self, PageSize};
 use crate::{doc_id, int, rows, s};
 use ferrum_kernel::{Ctx, Doc, Error, FieldError, HookCtx, Kernel, Result, Tx};
 use rust_decimal::prelude::ToPrimitive;
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -147,7 +147,81 @@ pub fn coord(row: &Doc, key: &str) -> Option<f64> {
     row.get(key).and_then(|v| ferrum_kernel::value::parse_decimal(v).ok()).and_then(|d| d.to_f64())
 }
 
-/// Every field names an existing role and lies on an existing page, inside it.
+/// The kinds of file an Attachment field may take.
+pub const ACCEPT: [&str; 3] = ["pdf", "png", "jpg"];
+
+/// What a Dropdown or Radio offers.
+pub fn choices(f: &Doc) -> Vec<String> {
+    f.get("options").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default()
+}
+
+/// What an Attachment field takes: its `accept` list, else every kind.
+pub fn accepted(f: &Doc) -> Vec<String> {
+    let listed: Vec<String> = s(f, "accept").unwrap_or_default().split(',').map(|k| k.trim().to_lowercase()).filter(|k| !k.is_empty()).collect();
+    if listed.is_empty() { ACCEPT.iter().map(|k| k.to_string()).collect() } else { listed }
+}
+
+/// A Radio's boxes, in the order of its choices: `[x, y, width, height]` each.
+pub fn option_boxes(f: &Doc) -> Vec<[f64; 4]> {
+    let one = |b: &Value| {
+        let a = b.as_array().filter(|a| a.len() == 4)?;
+        Some([a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?, a[3].as_f64()?])
+    };
+    f.get("option_boxes").and_then(Value::as_array).map(|a| a.iter().filter_map(one).collect()).unwrap_or_default()
+}
+
+/// What a field of one of the richer types must carry: its choices, boxes, bounds or kinds of file.
+fn check_kind(f: &Doc, at: &dyn Fn(&str, String) -> FieldError, page: Option<PageSize>, errors: &mut Vec<FieldError>) {
+    let kind = s(f, "field_type").unwrap_or_default();
+    match kind {
+        "Dropdown" | "Radio" => {
+            let given = f.get("options").and_then(Value::as_array);
+            let n = given.map_or(0, Vec::len);
+            let texts = choices(f);
+            let mut seen = HashSet::new();
+            if n == 0 || n > 50 || texts.len() != n {
+                errors.push(at("options", "give 1 to 50 choices, each a text".into()));
+            } else if texts.iter().any(|o| o.trim().is_empty() || o.chars().count() > 100) {
+                errors.push(at("options", "each choice is 1 to 100 characters".into()));
+            } else if !texts.iter().all(|o| seen.insert(o.trim().to_lowercase())) {
+                errors.push(at("options", "two choices are the same".into()));
+            } else if kind == "Radio" {
+                let boxes = option_boxes(f);
+                let listed = f.get("option_boxes").and_then(Value::as_array).map_or(0, Vec::len);
+                if boxes.len() != n || listed != n {
+                    errors.push(at("option_boxes", "a Radio needs one box [x, y, width, height] for each choice".into()));
+                } else if let Some(p) = page
+                    && boxes.iter().any(|[x, y, w, h]| *x < 0.0 || *y < 0.0 || *w < 4.0 || *h < 4.0 || x + w > p.width + 0.01 || y + h > p.height + 0.01)
+                {
+                    errors.push(at("option_boxes", "each box lies inside the page and is at least 4 points wide and high".into()));
+                }
+            }
+        }
+        "Number" => {
+            let bound = |key: &str| s(f, key).map(|v| ferrum_kernel::value::parse_decimal(&Value::String(v.to_string())).map_err(|_| key.to_string()));
+            let (min, max) = (bound("min_value"), bound("max_value"));
+            for b in [&min, &max].into_iter().flatten() {
+                if let Err(key) = b {
+                    errors.push(at(key, "is not a number".into()));
+                }
+            }
+            if let (Some(Ok(a)), Some(Ok(b))) = (&min, &max)
+                && a > b
+            {
+                errors.push(at("min_value", "is larger than the largest value".into()));
+            }
+        }
+        "Attachment" => {
+            if accepted(f).iter().any(|k| !ACCEPT.contains(&k.as_str())) {
+                errors.push(at("accept", "list kinds from pdf, png, jpg".into()));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every field names an existing role and lies on an existing page, inside it; a Dropdown, Radio, Number or
+/// Attachment carries what it needs (`check_kind`).
 pub fn check_fields(doc: &Doc, roles: &HashSet<String>, errors: &mut Vec<FieldError>) {
     let pages = page_sizes(doc);
     for (i, f) in rows(doc, "fields").iter().enumerate() {
@@ -156,8 +230,10 @@ pub fn check_fields(doc: &Doc, roles: &HashSet<String>, errors: &mut Vec<FieldEr
         if !role.trim().is_empty() && !roles.contains(&role_key(role)) {
             errors.push(at("role", format!("no signer has the role {}", role.trim())));
         }
-        let Some(pages) = &pages else { continue };
         let page = int(f, "page");
+        let on = pages.as_ref().filter(|p| page >= 1 && page as usize <= p.len()).map(|p| p[page as usize - 1]);
+        check_kind(f, &at, on, errors);
+        let Some(pages) = &pages else { continue };
         if page < 1 || page as usize > pages.len() {
             errors.push(at("page", format!("page {page} does not exist; the document has {} pages", pages.len())));
             continue;

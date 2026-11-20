@@ -4,7 +4,7 @@ import { t as tr } from "@ferrum/client";
 // are tested without a browser. The server holds the rules (what a field accepts, who may sign now);
 // this only shows what it says.
 
-export type FieldType = "Signature" | "Initials" | "Date Signed" | "Name" | "Text" | "Checkbox";
+export type FieldType = "Signature" | "Initials" | "Date Signed" | "Name" | "Text" | "Checkbox" | "Dropdown" | "Radio" | "Number" | "Attachment";
 
 export interface PageSize {
   page: number;
@@ -23,6 +23,15 @@ export interface SigningField {
   width: number;
   height: number;
   required: boolean;
+  /** Dropdown, Radio: the choices (a Radio's boxes are on the document, the page shows one place to answer). */
+  options?: string[];
+  /** Number: the bounds as text, and the places allowed. */
+  min_value?: string | null;
+  max_value?: string | null;
+  decimals?: number;
+  /** Attachment: the kinds of file allowed, and what this signer has uploaded so far. */
+  accept?: string[];
+  uploaded?: { name?: string | null; size?: number | null; file?: string | null } | null;
 }
 
 export interface SigningView {
@@ -137,13 +146,13 @@ export type Mark = { image: string } | { text: string };
 export interface Entry {
   signature: Mark | null;
   initials: Mark | null;
-  /** By field id: text for a Text field, true or false for a Checkbox. */
+  /** By field id: text for a Text, Dropdown, Radio or Number field, the uploaded file's id for an Attachment, true or false for a Checkbox. */
   values: Record<string, string | boolean>;
 }
 
 export const emptyEntry = (): Entry => ({ signature: null, initials: null, values: {} });
 
-export type TaskKind = "signature" | "initials" | "text" | "checkbox";
+export type TaskKind = "signature" | "initials" | "text" | "checkbox" | "choice" | "number" | "file";
 
 /** One thing to do. All Signature boxes are one task (one signature fills them all), likewise
  *  Initials; each Text and Checkbox box is its own. Name and Date Signed fill themselves. */
@@ -174,6 +183,9 @@ export function tasksOf(fields: SigningField[]): Task[] {
   for (const f of sorted) {
     if (f.field_type === "Text") out.push({ key: f.id, kind: "text", label: f.label || tr("Text"), required: f.required, fields: [f] });
     if (f.field_type === "Checkbox") out.push({ key: f.id, kind: "checkbox", label: f.label || tr("Checkbox"), required: f.required, fields: [f] });
+    if (f.field_type === "Dropdown" || f.field_type === "Radio") out.push({ key: f.id, kind: "choice", label: f.label || tr("Choice"), required: f.required, fields: [f] });
+    if (f.field_type === "Number") out.push({ key: f.id, kind: "number", label: f.label || tr("Number"), required: f.required, fields: [f] });
+    if (f.field_type === "Attachment") out.push({ key: f.id, kind: "file", label: f.label || tr("Attachment"), required: f.required, fields: [f] });
   }
   return out.sort((a, b) => readingOrder(a.fields[0], b.fields[0]) || a.key.localeCompare(b.key));
 }
@@ -185,6 +197,9 @@ export function isDone(t: Task, e: Entry): boolean {
     case "initials":
       return e.initials !== null;
     case "text":
+    case "choice":
+    case "number":
+    case "file":
       return typeof e.values[t.key] === "string" && (e.values[t.key] as string).trim() !== "";
     case "checkbox":
       return e.values[t.key] === true;
@@ -221,6 +236,12 @@ export function actionLabel(next: Task | null): string {
       return tr("Fill in “{label}”", { label: next.label });
     case "checkbox":
       return tr("Tick “{label}”", { label: next.label });
+    case "choice":
+      return tr("Choose “{label}”", { label: next.label });
+    case "number":
+      return tr("Enter “{label}”", { label: next.label });
+    case "file":
+      return tr("Attach “{label}”", { label: next.label });
   }
 }
 
@@ -257,7 +278,7 @@ export function signBody(fields: SigningField[], e: Entry): SignBody {
   for (const f of fields) {
     const v = e.values[f.id];
     if (f.field_type === "Checkbox") values[f.id] = v === true;
-    if (f.field_type === "Text" && typeof v === "string" && v.trim()) values[f.id] = v.trim();
+    if (typeof v === "string" && v.trim() && ["Text", "Dropdown", "Radio", "Number", "Attachment"].includes(f.field_type)) values[f.id] = v.trim();
   }
   const body: SignBody = { consent: true, values };
   if (fields.some((f) => f.field_type === "Signature") && e.signature) body.signature = e.signature;

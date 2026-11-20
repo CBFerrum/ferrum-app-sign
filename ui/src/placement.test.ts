@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addBox, arrow, type Box, colourOf, commit, copyOf, describe as say, fit, grow, history, lacksSignature, move, redo, resize, sameBoxes, spread, toBoxes, toPoints, toRows, undo } from "./placement";
+import { addBox, arrow, type Box, colourOf, commit, copyOf, describe as say, fit, grow, history, lacksSignature, move, radioBoxes, redo, resize, sameBoxes, spread, toBoxes, toPoints, toRows, undo } from "./placement";
 
 const page = { width: 612, height: 792 };
 const box = (over: Partial<Box> = {}): Box => ({ key: "k", role: "Client", field_type: "Signature", label: "", page: 1, x: 100, y: 100, width: 160, height: 44, required: true, ...over });
@@ -165,5 +165,17 @@ describe("rows and colours", () => {
   it("says a box in words", () => {
     expect(say(box({ field_type: "Text", label: "Company name", role: "Company", page: 3 }))).toBe("Text “Company name” for Company, page 3");
     expect(say(box())).toBe("Signature for Client, page 1");
+  });
+});
+
+describe("a radio's boxes", () => {
+  it("puts one square per choice along the field's box", () => {
+    const boxes = radioBoxes({ x: 100, y: 200, width: 120, height: 18 }, 3);
+    expect(boxes).toEqual([
+      [100, 200, 14, 14],
+      [140, 200, 14, 14],
+      [180, 200, 14, 14],
+    ]);
+    expect(radioBoxes({ x: 0, y: 0, width: 50, height: 10 }, 0)).toEqual([]);
   });
 });

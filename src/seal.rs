@@ -14,7 +14,7 @@ use crate::request::obj;
 use crate::{doc_id, human, int, now, rows, s, settings, signature, time, ts};
 use chrono::{DateTime, Utc};
 use ferrum_kernel::{Ctx, Doc, Error, Kernel, Result, with_retry};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -206,13 +206,26 @@ pub fn stamps(doc: &Doc) -> std::result::Result<Vec<Stamp>, String> {
             }
             Ok(s(sg, &format!("{kind}_text")).map(|t| Mark::Typed(t.to_string())))
         };
+        let value = s(&f, "value");
         let mark = match s(&f, "field_type") {
             Some("Signature") => ink("signature")?,
             Some("Initials") => ink("initials")?,
-            Some("Checkbox") => (s(&f, "value") == Some("Yes")).then_some(Mark::Check),
-            _ => s(&f, "value").map(|v| Mark::Text(v.to_string())),
+            Some("Checkbox") => (value == Some("Yes")).then_some(Mark::Check),
+            // The chosen box of a Radio carries the tick; the others stay empty. An Attachment is shown nowhere on the pages
+            // (the certificate lists it).
+            Some("Radio") => value.is_some().then_some(Mark::Check),
+            Some("Attachment") => None,
+            _ => value.map(|v| Mark::Text(v.to_string())),
         };
-        let (Some(mark), Some(x), Some(y), Some(width), Some(height)) = (mark, coord(&f, "x"), coord(&f, "y"), coord(&f, "width"), coord(&f, "height")) else {
+        let mut rect = (coord(&f, "x"), coord(&f, "y"), coord(&f, "width"), coord(&f, "height"));
+        if s(&f, "field_type") == Some("Radio") {
+            let at = document::choices(&f).iter().position(|c| Some(c.as_str()) == value);
+            rect = match at.and_then(|i| document::option_boxes(&f).get(i).copied()) {
+                Some([x, y, w, h]) => (Some(x), Some(y), Some(w), Some(h)),
+                None => (None, None, None, None),
+            };
+        }
+        let (Some(mark), (Some(x), Some(y), Some(width), Some(height))) = (mark, rect) else {
             continue;
         };
         out.push(Stamp { page: int(&f, "page") as u32, x, y, width, height, mark });
@@ -226,6 +239,8 @@ struct Certificate {
     original_sha: String,
     trail_head: String,
     signers: Vec<[String; 3]>,
+    /// Per signer: the files they attached, with their size and SHA-256.
+    attached: Vec<Vec<String>>,
     events: Vec<String>,
     footer: String,
 }
@@ -286,6 +301,30 @@ impl Certificate {
                 }
             })
             .collect();
+        let attached = rows(doc, "signers")
+            .iter()
+            .map(|r| {
+                let uploads = r.get("attachments").and_then(Value::as_object).cloned().unwrap_or_default();
+                let fields = rows(doc, "fields");
+                // Only the file a field finally holds is listed, under the field's label.
+                fields
+                    .iter()
+                    .filter(|f| s(f, "field_type") == Some("Attachment"))
+                    .filter_map(|f| {
+                        let u = uploads.get(s(f, "id")?)?;
+                        (s(f, "value") == u.get("file").and_then(Value::as_str)).then(|| {
+                            format!(
+                                "{}: {} · {} bytes · SHA-256 {}",
+                                s(f, "label").unwrap_or("Attachment"),
+                                u.get("name").and_then(Value::as_str).unwrap_or("file"),
+                                u.get("size").and_then(Value::as_i64).unwrap_or(0),
+                                u.get("sha256").and_then(Value::as_str).unwrap_or_default()
+                            )
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
         let events = trail
             .iter()
             .map(|e| {
@@ -311,6 +350,7 @@ impl Certificate {
             original_sha: s(doc, "document_sha256").unwrap_or_default().to_string(),
             trail_head: trail.last().and_then(|e| e.event_hash.clone()).unwrap_or_default(),
             signers,
+            attached,
             events,
             footer: format!("{number} · {title}"),
         }
@@ -343,6 +383,9 @@ impl Certificate {
             p.push(Para::new(format!("{}. {who}", i + 1), 9.5).before(6.0));
             p.push(Para::new(how.clone(), 8.5).indent(12.0));
             p.push(Para::new(device.clone(), 8.0).muted().indent(12.0));
+            for line in self.attached.get(i).into_iter().flatten() {
+                p.push(Para::new(format!("Attached · {line}"), 8.0).muted().indent(12.0));
+            }
         }
         p.push(Para::new("Events", 12.0).before(14.0));
         for e in &self.events {
@@ -387,5 +430,37 @@ mod tests {
         let line = |c: &Certificate| c.head.iter().find(|(k, _)| k == "Signers agreed to").map(|(_, v)| v.clone());
         assert_eq!(line(&Certificate::new(&doc, &[], &settings(Some("I accept Acme's terms.")), None, now())).as_deref(), Some("I accept Acme's terms."));
         assert_eq!(line(&Certificate::new(&doc, &[], &settings(None), None, now())), None);
+    }
+
+    fn request(fields: Value) -> Doc {
+        let signers = json!([{"role": "Client", "name": "Cleo", "email": "cleo@client.test", "status": "Signed", "signature_text": "Cleo",
+            "attachments": {"att": {"file": "f1", "name": "id.png", "size": 42, "sha256": "abc123", "uploads": 1}}}]);
+        serde_json::from_value(json!({"number": "SIG-1", "title": "T", "signers": signers, "fields": fields})).unwrap()
+    }
+
+    /// S11-G2: a Radio ticks only its chosen box, a Dropdown and a Number show their text, an Attachment shows nothing
+    /// on the pages and is listed, with its hash, on the certificate.
+    #[test]
+    fn a_radio_marks_only_its_chosen_box_and_an_attachment_is_listed() {
+        let doc = request(json!([
+            {"id": "r", "role": "Client", "field_type": "Radio", "page": 1, "x": 10, "y": 10, "width": 100, "height": 14, "value": "Blue",
+             "options": ["Red", "Blue"], "option_boxes": [[10, 10, 14, 14], [60, 10, 14, 14]]},
+            {"id": "d", "role": "Client", "field_type": "Dropdown", "page": 1, "x": 10, "y": 40, "width": 100, "height": 20, "value": "Pro", "options": ["Basic", "Pro"]},
+            {"id": "n", "role": "Client", "field_type": "Number", "page": 1, "x": 10, "y": 70, "width": 100, "height": 20, "value": "7"},
+            {"id": "att", "label": "ID card", "role": "Client", "field_type": "Attachment", "page": 1, "x": 10, "y": 100, "width": 100, "height": 20, "value": "f1"},
+        ]));
+        let stamps = stamps(&doc).unwrap();
+        assert_eq!(stamps.len(), 3, "the attachment has no stamp");
+        assert!(matches!(stamps[0].mark, Mark::Check) && (stamps[0].x, stamps[0].width) == (60.0, 14.0), "the chosen box carries the tick");
+        assert!(matches!(&stamps[1].mark, Mark::Text(t) if t == "Pro") && matches!(&stamps[2].mark, Mark::Text(t) if t == "7"));
+        let cert = Certificate::new(&doc, &[], &settings(None), None, now());
+        assert_eq!(cert.attached, vec![vec!["ID card: id.png · 42 bytes · SHA-256 abc123".to_string()]]);
+        let none = request(json!([{"id": "r", "role": "Client", "field_type": "Radio", "page": 1, "x": 10, "y": 10, "width": 100, "height": 14,
+            "options": ["Red"], "option_boxes": [[10, 10, 14, 14]]}]));
+        assert!(stamps_of(&none).is_empty(), "an unanswered radio marks nothing");
+    }
+
+    fn stamps_of(doc: &Doc) -> Vec<Stamp> {
+        stamps(doc).unwrap()
     }
 }

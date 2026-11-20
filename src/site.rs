@@ -7,6 +7,7 @@
 //! * `GET /signing/{token}/document` — the original PDF
 //! * `POST /signing/{token}/sign` — `{consent, signature, initials?, values?}`
 //! * `POST /signing/{token}/decline` — `{reason}`
+//! * `POST /signing/{token}/attachments/{field}` — the file as the body (`X-File-Name` names it), for an Attachment field
 //! * `POST /verify` — a PDF as the body: is it a document sealed here, unchanged?
 //!
 //! The access code, when the signer has one, goes in the `X-Access-Code` header; the session of a signer whose link is
@@ -36,7 +37,12 @@ impl Site for SignSite {
 
     /// `POST /verify` takes a whole PDF, the only route here that does.
     fn max_body_for(&self, method: &str, path: &str) -> usize {
-        if method == "POST" && path.trim_matches('/') == "verify" { pdf::MAX_BYTES + 64 * 1024 } else { self.max_body() }
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+        match (method, parts.as_slice()) {
+            ("POST", ["verify"]) => pdf::MAX_BYTES + 64 * 1024,
+            ("POST", ["signing", _, "attachments", _]) => signing::MAX_ATTACHMENT + 64 * 1024,
+            _ => self.max_body(),
+        }
     }
 
     async fn handle(&self, k: &Kernel, req: SiteRequest) -> Result<SiteResponse> {
@@ -56,6 +62,10 @@ impl Site for SignSite {
                 Gate::Gone(m, state) => Reply::Gone(m, state).into_response(),
             },
             ("POST", ["signing", t, "sign"]) => signing::sign(k, tenant, t, &client, &req.body).await?.into_response(),
+            ("POST", ["signing", t, "attachments", field]) => {
+                let name = header(&req, "x-file-name").unwrap_or_default();
+                signing::attach(k, tenant, t, &client, field, name, &req.body).await?.into_response()
+            }
             ("POST", ["signing", t, "decline"]) => signing::decline(k, tenant, t, &client, &req.body).await?.into_response(),
             ("POST", ["signing", t, "code"]) => signing::send_code(k, tenant, t, &client).await?.into_response(),
             ("POST", ["signing", t, "verify"]) => signing::confirm_code(k, tenant, t, &client, &req.body).await?.into_response(),
