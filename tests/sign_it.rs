@@ -211,8 +211,6 @@ struct T {
     sign: ferrum_kernel::vault::Vault,
     /// The handles of the test's own apps (each package of `boot_with`'s, as an app of its name).
     apps: HashMap<String, ferrum_kernel::vault::Vault>,
-    /// The server's mailer, when the test gave one: what it was asked to send.
-    mail: Option<Arc<TestMailer>>,
 }
 
 /// The server's mailer in memory: `(to, subject, html, attached file names)`.
@@ -497,7 +495,7 @@ async fn scenario() {
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle"), apps: HashMap::new(), mail: None };
+    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle"), apps: HashMap::new() };
 
     // ───────────── a workspace without Mail, in New York ─────────────
     let acme = t.tenant("acme", &["sign"], "America/New_York").await;
@@ -1340,7 +1338,7 @@ async fn boot_mailed(settings: KernelSettings, extra: Vec<ferrum_meta::Package>,
     let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, mailer).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    T { k, store, sign: sign.expect("Sign's handle"), apps, mail }
+    T { k, store, sign: sign.expect("Sign's handle"), apps }
 }
 
 /// K0-7 (S9): a role that reads Sign Requests but not some of their fields. Reports group, filter and aggregate only on

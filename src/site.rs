@@ -111,6 +111,7 @@ async fn branded_page(k: &Kernel, tenant: uuid::Uuid, token_str: &str) -> Result
     page_with(token_str, &brand_head(k, tenant).await)
 }
 
+#[cfg(test)]
 fn page(token_str: &str) -> Result<SiteResponse> {
     page_with(token_str, "")
 }

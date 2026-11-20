@@ -424,7 +424,7 @@ fn check_cms(cms: &[u8], before: &[u8], after: &[u8]) -> Checked {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::seal_key::SealKey;
+    use crate::seal_key::{Key, SealKey};
 
     fn seal() -> SealKey {
         let key = Key::P256(p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng));
