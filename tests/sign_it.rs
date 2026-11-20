@@ -1844,7 +1844,9 @@ async fn signed_in_customer() {
     assert_eq!((signed_session.status, signed_plain.status), (200, 200));
     let (a, b): (Value, Value) = (serde_json::from_slice(&signed_plain.body).unwrap(), serde_json::from_slice(&signed_session.body).unwrap());
     assert_eq!((&a["request_status"], &b["request_status"]), (&json!("Completed"), &json!("Completed")));
-    assert_eq!(t.trail(&acme, plain).await, t.trail(&acme, session).await, "the session changes nothing in the trail");
+    // (The plain request was opened by the page checks above, so its trail has Viewed: the rest is what is compared.)
+    let without_views = |trail: Vec<String>| trail.into_iter().filter(|e| !e.starts_with("Viewed")).collect::<Vec<_>>();
+    assert_eq!(without_views(t.trail(&acme, plain).await), without_views(t.trail(&acme, session).await), "the session changes nothing in the trail");
     // The person is no one in the trail: the signer is.
     let actors: Vec<String> = {
         let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
