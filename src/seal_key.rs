@@ -183,10 +183,10 @@ fn parse(key_pem: &str, certificates_pem: &str) -> std::result::Result<SealKey, 
     Ok(SealKey { key, chain })
 }
 
-/// What a bad seal is checked for when Sign Settings are saved: a key and certificate that do not match, an RSA key, a
+/// What a bad seal is checked for when `Set Seal` is called (it returns who the certificate says the seal is): a key and certificate that do not match, an RSA key, a
 /// certificate that is not one, are refused there, not at the first seal.
-pub fn check(key_pem: &str, certificates_pem: &str) -> std::result::Result<(), String> {
-    parse(key_pem, certificates_pem).map(|_| ())
+pub fn check(key_pem: &str, certificates_pem: &str) -> std::result::Result<String, String> {
+    parse(key_pem, certificates_pem).map(|s| s.subject())
 }
 
 async fn read(k: &Kernel, tx: &mut Tx, tenant: Uuid) -> Result<Option<(String, Option<String>, bool)>> {

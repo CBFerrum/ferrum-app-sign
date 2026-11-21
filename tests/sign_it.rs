@@ -2366,7 +2366,9 @@ async fn bulk() {
     assert!(t.get(&asha, "SignBulkSend", id).await["recipients"][2]["signers"].is_null());
 
     // The daily limit pauses sending, and room made later lets it go on.
-    let settings = uid(&t.k.insert(&mira, "SignSettings", obj(json!({"sender_name": "Acme", "bulk_per_day": 2}))).await.unwrap());
+    // (Sending made the settings row with the signing key: its limit is what is changed.)
+    let settings = uid(&t.list(&mira, "SignSettings", json!({})).await[0]);
+    t.k.update(&mira, "SignSettings", settings, obj(json!({"bulk_per_day": 2})), None).await.unwrap();
     let capped = bulk_of(&asha, (6..=9).map(person).collect()).await;
     start(&asha, capped).await.unwrap();
     t.maintenance(&acme).await;
@@ -2504,12 +2506,17 @@ async fn digital_seal() {
     let settings = uid(&t.list(&mira, "SignSettings", json!({})).await[0]);
     let certificate = t.get(&mira, "SignSettings", settings).await["seal_certificate"].as_str().unwrap().to_string();
     let foreign = p256::SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng).to_pkcs8_pem(LineEnding::LF).unwrap().to_string();
-    let m = refused(t.k.update(&mira, "SignSettings", settings, obj(json!({"seal_key": foreign, "seal_certificate": certificate})), None).await, "invalid");
+    let set = |params: Value| {
+        let (k, who) = (t.k.clone(), mira.clone());
+        async move { k.run_action(&who, "SignSettings", settings, "set_seal", params).await }
+    };
+    let m = refused(set(json!({"seal_key": foreign, "seal_certificate": certificate})).await, "invalid");
     assert!(m.contains("not for the seal key"), "{m}");
     let rsa = "-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAu7vjTXgGDKrVZyeX\n-----END PRIVATE KEY-----\n";
-    let m = refused(t.k.update(&mira, "SignSettings", settings, obj(json!({"seal_key": rsa, "seal_certificate": certificate})), None).await, "invalid");
+    let m = refused(set(json!({"seal_key": rsa, "seal_certificate": certificate})).await, "invalid");
     assert!(m.contains("RSA keys are not accepted"), "{m}");
-    refused(t.k.update(&mira, "SignSettings", settings, obj(json!({"seal_key": foreign})), None).await, "invalid");
+    refused(set(json!({"seal_key": foreign})).await, "invalid");
+    refused(t.k.run_action(&asha, "SignSettings", settings, "set_seal", json!({"seal_key": foreign, "seal_certificate": certificate})).await, "forbidden");
     assert_eq!(ferrum_app_sign::workspace_seal(&t.k, acme.id).await.unwrap(), Some(a), "the seal is as it was");
 
     // No seal chosen: the file is as it was before, signed by nobody.

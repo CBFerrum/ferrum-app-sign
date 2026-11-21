@@ -9,8 +9,8 @@
     - {name: reminder_every_days, type: int, default: 3, min: 0, max: 60, description: "Signers whose turn it is are reminded after this many days without signing, then at the same interval; 0 = no automatic reminders"}
     - {name: max_reminders, type: int, default: 3, min: 0, max: 20, description: "Automatic reminders per signer at most"}
     - {name: seal, type: select, options: [Workspace Key, None], default: Workspace Key, description: "What digitally seals every finished document: the workspace's own key (made at the first seal, kept in the vault), or nothing. A seal key and certificate from a certificate authority, set below, replace the made ones"}
-    - {name: seal_certificate, type: text, max_length: 20000, description: "PEM: the seal's certificate and its chain, the seal's own first. Set together with the key below; when neither is set, a self-signed one is made"}
-    - {name: seal_key, type: secret, hidden: true, description: "The seal's private key, PKCS#8 PEM, on curve P-256 or P-384 (RSA keys are not accepted). Left empty, one is made"}
+    - {name: seal_certificate, type: text, max_length: 20000, read_only: true, description: "PEM: the seal's certificate and its chain, the seal's own first. A self-signed one is made with the first seal; Set Seal replaces it with a certificate authority's"}
+    - {name: seal_key, type: secret, read_only: true, hidden: true, description: "The seal's private key (PKCS#8 PEM, curve P-256 or P-384; RSA keys are not accepted), made with the first seal or set by Set Seal"}
     - {name: timestamp_connection, type: data, max_length: 63, description: "The name of a time-stamping authority's connection (RFC 3161, a copy of the Sign Timestamp template): every seal then carries its time stamp"}
     - {name: bulk_per_day, type: int, default: 2000, min: 1, max: 100000, description: "Requests that bulk sends may make in 24 hours; sending pauses at the limit and goes on when room is free"}
     - {name: brand, type: link, to: Brand, description: "The brand signers see on the signing page (empty: the address's or the workspace's own)"}
@@ -25,6 +25,17 @@
         effect: transactional_action
         returns: {type: object, properties: {rotated: {type: boolean}}}
         completion: "A new signing key is stored; every link sent before it stops working"
+    - name: set_seal
+      label: Set Seal
+      permission: write
+      confirm: "Every document sealed from now on is sealed with this key and certificate. Continue?"
+      params:
+        - {name: seal_key, type: secret, label: Seal Key, required: true, description: "The private key, PKCS#8 PEM, on curve P-256 or P-384 (RSA keys are not accepted)"}
+        - {name: seal_certificate, type: text, label: Certificate, required: true, description: "PEM: the certificate for that key and its chain, the key's own certificate first"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {sealed_by: {type: string}}}
+        completion: "The key and certificate are stored (the key in the vault); every document sealed from now on carries a seal by them"
     - name: allow_embedding
       label: Allow Embedding
       permission: write

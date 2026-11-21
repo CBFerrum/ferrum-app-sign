@@ -75,16 +75,6 @@ pub struct SettingsHook;
 
 #[async_trait]
 impl DocHook for SettingsHook {
-    /// A seal key and its certificate are set together and must match: checked here, not at the first seal.
-    async fn before_validate(&self, _hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
-        let given = |k: &str| doc.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
-        match (given("seal_key"), given("seal_certificate")) {
-            (Some(key), Some(certificates)) => crate::seal_key::check(&key, &certificates).map_err(|m| Error::field("seal_key", m)),
-            (Some(_), None) => Err(Error::field("seal_certificate", "give the certificate that goes with the seal key")),
-            _ => Ok(()),
-        }
-    }
-
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
         match name {
             "rotate_signing_key" => {
@@ -92,9 +82,25 @@ impl DocHook for SettingsHook {
                 Ok(Some(json!({"rotated": true})))
             }
             "allow_embedding" => allow_embedding(hc, params).await.map(Some),
+            "set_seal" => set_seal(hc, doc, params).await.map(Some),
             _ => Ok(None),
         }
     }
+}
+
+/// Sets the seal: the key must be on P-256 or P-384 and the certificate must be for it, checked here, before anything is stored
+/// (the key goes into the vault with the settings' other secret).
+async fn set_seal(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Value> {
+    let given = |k: &str| params.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+    let key = given("seal_key").ok_or_else(|| Error::field("seal_key", "give the private key"))?;
+    let certificates = given("seal_certificate").ok_or_else(|| Error::field("seal_certificate", "give the certificate that goes with the key"))?;
+    let subject = crate::seal_key::check(&key, &certificates).map_err(|m| Error::field("seal_key", m))?;
+    let sys = ferrum_domain::util::sys(hc.ctx);
+    let mut values = Doc::new();
+    values.insert("seal_key".into(), json!(key));
+    values.insert("seal_certificate".into(), json!(certificates));
+    hc.kernel.update_tx(&sys, hc.tx, "SignSettings", doc_id(doc)?, values, None).await?;
+    Ok(json!({"sealed_by": subject}))
 }
 
 /// The Embedding of the signing page (`sign/s`) holds these origins: the platform frames the page only for them. The
