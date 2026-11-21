@@ -285,10 +285,8 @@ fn check_kind(f: &Doc, at: &dyn Fn(&str, String) -> FieldError, page: Option<Pag
                 errors.push(at("min_value", "is larger than the largest value".into()));
             }
         }
-        "Attachment" => {
-            if accepted(f).iter().any(|k| !ACCEPT.contains(&k.as_str())) {
-                errors.push(at("accept", "list kinds from pdf, png, jpg".into()));
-            }
+        "Attachment" if accepted(f).iter().any(|k| !ACCEPT.contains(&k.as_str())) => {
+            errors.push(at("accept", "list kinds from pdf, png, jpg".into()));
         }
         _ => {}
     }

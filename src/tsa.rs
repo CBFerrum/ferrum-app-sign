@@ -6,8 +6,8 @@ use ferrum_kernel::connections::{self, Call};
 use ferrum_kernel::{Ctx, Error, Kernel, Result};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use x509_cert::der::asn1::{Int, ObjectIdentifier, OctetString};
-use x509_cert::der::{Any, Decode, Encode, Sequence};
+use x509_cert::der::asn1::{GeneralizedTime, Int, ObjectIdentifier, OctetString};
+use x509_cert::der::{Decode, Encode, Sequence};
 use x509_cert::spki::AlgorithmIdentifierOwned;
 
 /// `TimeStampReq` (RFC 3161 2.4.1): version 1, the imprint, a nonce, and the authority's certificate asked for.
@@ -23,22 +23,6 @@ struct Request {
 struct Imprint {
     algorithm: AlgorithmIdentifierOwned,
     digest: OctetString,
-}
-
-/// The parts of a token's `TSTInfo` that are checked.
-#[derive(Sequence)]
-struct TstInfo {
-    version: u8,
-    policy: ObjectIdentifier,
-    imprint: Imprint,
-    serial: Int,
-    gen_time: x509_cert::der::asn1::GeneralizedTime,
-    #[asn1(optional = "true")]
-    accuracy: Option<Any>,
-    #[asn1(optional = "true")]
-    ordering: Option<bool>,
-    #[asn1(optional = "true")]
-    nonce: Option<Int>,
 }
 
 /// The request for a time stamp of `digest` (a SHA-256), and the nonce it carries.
@@ -72,14 +56,15 @@ pub fn check(response: &[u8], digest: &[u8; 32], nonce: &[u8]) -> std::result::R
     }
     let token_der = elements.get(1).ok_or("the time-stamp answer holds no token")?.2.to_vec();
     let info = tst_info(&token_der)?;
-    if info.imprint.digest.as_bytes() != digest.as_slice() {
+    if info.digest != digest.as_slice() {
         return Err("the time stamp is for another digest".into());
     }
-    let sent = Int::new(nonce).map_err(|e| e.to_string())?;
-    if info.nonce.as_ref() != Some(&sent) {
+    // The nonce is a positive INTEGER: compared as its DER content, without leading zeros.
+    let strip = |n: &[u8]| n.iter().skip_while(|b| **b == 0).copied().collect::<Vec<u8>>();
+    if info.nonce.as_deref().map(strip) != Some(strip(nonce)) {
         return Err("the time stamp does not carry the nonce that was sent".into());
     }
-    Ok((token_der, info.gen_time.to_unix_duration().as_secs() as i64))
+    Ok((token_der, info.time))
 }
 
 /// The elements of one DER value's content as `(tag, content, whole element)`: single-byte tags, short and long length forms.
@@ -105,9 +90,18 @@ pub(crate) fn children(der: &[u8]) -> std::result::Result<Vec<(u8, &[u8], &[u8])
     Ok(out)
 }
 
+/// What is checked of a token's `TSTInfo`.
+struct Tst {
+    digest: Vec<u8>,
+    nonce: Option<Vec<u8>>,
+    /// Seconds since 1970.
+    time: i64,
+}
+
 /// `TSTInfo` of a token: `ContentInfo { contentType, [0] SignedData { version, algorithms, encapContentInfo { type, [0]
-/// OCTET STRING }, … } }`, walked down to the octet string.
-fn tst_info(token: &[u8]) -> std::result::Result<TstInfo, String> {
+/// OCTET STRING }, … } }`, walked down to the octet string, whose `TSTInfo { version, policy, messageImprint, serialNumber,
+/// genTime, accuracy?, ordering?, nonce?, … }` is then read element by element.
+fn tst_info(token: &[u8]) -> std::result::Result<Tst, String> {
     let bad = |m: String| format!("the time-stamp token cannot be read ({m})");
     // The content of the one element `d` is.
     let first =
@@ -123,12 +117,22 @@ fn tst_info(token: &[u8]) -> std::result::Result<TstInfo, String> {
         first(&nth(&encapsulated, 1)?)
     })()
     .map_err(bad)?;
-    TstInfo::from_der(&octets).map_err(|e| format!("the time-stamp token's content cannot be read ({e})"))
+    let info = children(&octets).and_then(|c| c.first().map(|e| e.1.to_vec()).ok_or_else(|| "empty".to_string())).map_err(bad)?;
+    let elements = children(&info).map_err(bad)?;
+    let imprint = children(elements.get(2).ok_or("the token has no imprint")?.1).map_err(bad)?;
+    let digest = imprint.get(1).ok_or("the token has no digest")?.1.to_vec();
+    let time = GeneralizedTime::from_der(elements.get(4).ok_or("the token has no time")?.2)
+        .map_err(|e| format!("the token's time: {e}"))?
+        .to_unix_duration()
+        .as_secs() as i64;
+    // After the time: an optional accuracy (a SEQUENCE) and ordering (a BOOLEAN), then the nonce (an INTEGER) if any.
+    let nonce = elements.iter().skip(5).find(|e| e.0 == 0x02).map(|e| e.1.to_vec());
+    Ok(Tst { digest, nonce, time })
 }
 
 /// The time a token (DER `ContentInfo`) states, seconds since 1970.
 pub fn time_of(token: &[u8]) -> std::result::Result<i64, String> {
-    Ok(tst_info(token)?.gen_time.to_unix_duration().as_secs() as i64)
+    Ok(tst_info(token)?.time)
 }
 
 /// A time stamp of `digest` from the connection named `connection` (called outside any transaction): the token's DER and
@@ -159,6 +163,21 @@ pub fn imprint_of(signature: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use x509_cert::der::Any;
+
+    /// `TSTInfo` as an authority writes it, to build answers with.
+    #[derive(Sequence)]
+    struct TstInfo {
+        version: u8,
+        policy: ObjectIdentifier,
+        imprint: Imprint,
+        serial: Int,
+        gen_time: GeneralizedTime,
+        #[asn1(optional = "true")]
+        accuracy: Option<Any>,
+        #[asn1(optional = "true")]
+        nonce: Option<Int>,
+    }
 
     /// A granted answer built as an authority would, for `digest` and `nonce`.
     pub fn answer(digest: &[u8; 32], nonce: &[u8], status: u8) -> Vec<u8> {
@@ -170,9 +189,8 @@ mod tests {
                 digest: OctetString::new(digest.to_vec()).unwrap(),
             },
             serial: Int::new(&[1]).unwrap(),
-            gen_time: x509_cert::der::asn1::GeneralizedTime::from_unix_duration(std::time::Duration::from_secs(1_800_000_000)).unwrap(),
+            gen_time: GeneralizedTime::from_unix_duration(std::time::Duration::from_secs(1_800_000_000)).unwrap(),
             accuracy: None,
-            ordering: None,
             nonce: Some(Int::new(nonce).unwrap()),
         };
         // ContentInfo { id-signedData, [0] { 3, SET {}, { id-ct-TSTInfo, [0] OCTET STRING } } }: nothing else in the SignedData.

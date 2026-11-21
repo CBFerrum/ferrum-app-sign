@@ -459,7 +459,10 @@ mod tests {
     fn one_changed_byte_breaks_the_seal() {
         let seal = seal();
         let out = begin(&sealed_pdf(), &seal, b"{}", Utc::now()).unwrap().finish(None).unwrap();
-        for at in [20usize, out.len() / 2] {
+        // A byte of the file's own pages and one just before the signature's place (the place itself, past the CMS, is padding
+        // the ByteRange leaves out).
+        let place = find_last(&out, b"/Contents <").unwrap();
+        for at in [20usize, place - 40] {
             let mut changed = out.clone();
             changed[at] ^= 0x01;
             assert!(!check(&changed).unwrap().valid, "a change at {at}");

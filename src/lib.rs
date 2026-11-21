@@ -180,8 +180,9 @@ mod tests {
         let catalog = ferrum_meta::Catalog::from_packages(all).unwrap_or_else(|e| panic!("{e}"));
         let schema = ferrum_meta::effective::build(&catalog, &[PACKAGE.to_string()], &[], 1).unwrap_or_else(|e| panic!("{e}"));
         assert!(schema.warnings.is_empty(), "{:?}", schema.warnings);
-        assert!(schema.entity("SignSettings").is_some_and(|e| e.secret_fields().count() == 1));
-        for e in ["SignRequest", "SignTemplate", "SignEvent"] {
+        // The signing key and (S11-G5, design B2.2) the seal key: the only secrets, both write-only.
+        assert!(schema.entity("SignSettings").is_some_and(|e| e.secret_fields().count() == 2));
+        for e in ["SignRequest", "SignTemplate", "SignEvent", "SignDocument", "SignBulkSend"] {
             assert!(schema.entity(e).is_some(), "{e}");
         }
         assert!(MANIFEST.contains("packages: [sign]"));
