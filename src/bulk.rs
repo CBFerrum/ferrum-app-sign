@@ -187,7 +187,14 @@ async fn send_rows(k: &Kernel, ctx: &Ctx, bulk: Uuid) -> Result<usize> {
                         .bind(bulk)
                         .fetch_optional(&mut *tx)
                         .await?;
-                    if status.as_deref() != Some("Sending") {
+                    // Another run may have failed this row a moment ago (or made it): it is recorded once, while it waits.
+                    let waiting: Option<String> =
+                        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("select status from {table} where tenant_id = $1 and id = $2 for update")))
+                            .bind(ctx.tenant)
+                            .bind(*row)
+                            .fetch_optional(&mut *tx)
+                            .await?;
+                    if status.as_deref() != Some("Sending") || waiting.as_deref() != Some("Waiting") {
                         tx.rollback().await?;
                         return Ok(());
                     }

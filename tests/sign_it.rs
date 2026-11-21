@@ -1981,8 +1981,10 @@ async fn wording() {
     assert_eq!(first[0].0, "sam@supplier.test");
     assert!(first[0].1.contains("please sign \"Purchase Order\""), "the package's invitation wording: {}", first[0].1);
     let prefix = "https://erp.globex.test/api/site/globex/sign/s/";
-    let start = first[0].2.find(prefix).expect("an absolute signing link in the email");
-    let token: String = first[0].2[start + prefix.len()..].chars().take(43).collect();
+    // (The template's escaping writes a slash as an entity; a browser reads it back.)
+    let body = first[0].2.replace("&#x2f;", "/");
+    let start = body.find(prefix).unwrap_or_else(|| panic!("an absolute signing link in the email: {body}"));
+    let token: String = body[start + prefix.len()..].chars().take(43).collect();
     // The link is a secret of its message: the log keeps a placeholder, not the token.
     let log = t.k.message_log(&gina, Some(("SignRequest", po_id)), None, 20).await.unwrap();
     assert!(!log.is_empty() && !serde_json::to_string(&log).unwrap().contains(&token), "the message log never holds the signing link");

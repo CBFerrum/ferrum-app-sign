@@ -355,8 +355,10 @@ pub fn check(pdf: &[u8]) -> Option<Checked> {
         return Some(bad("the signature does not cover the whole file: something was added or changed after it"));
     }
     // The contents between the two ranges: `<hex…>` padded with zeros.
-    let hex_part = std::str::from_utf8(pdf.get(b + 1..c.checked_sub(1)?)?).ok()?;
-    let der = hex::decode(hex_part).ok()?;
+    let Some(hex_part) = c.checked_sub(1).and_then(|end| pdf.get(b + 1..end)).and_then(|h| std::str::from_utf8(h).ok()) else {
+        return Some(bad("the signature's contents cannot be read"));
+    };
+    let Ok(der) = hex::decode(hex_part) else { return Some(bad("the signature's contents cannot be read")) };
     let Some(cms) = trim_der(&der) else { return Some(bad("the signature's contents cannot be read")) };
     Some(check_cms(cms, &pdf[..b], &pdf[c..]))
 }
