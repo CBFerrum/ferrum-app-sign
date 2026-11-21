@@ -10,7 +10,7 @@ import { ArrowDown, ArrowUp, Check, Info, Plus, Send, Trash } from "lucide-react
 import { api, ApiError, docPath, download, errorMessage, type FieldError, todayIso, t, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, confirmDialog, Field, FormSkeleton, StatePanel, toast, useLiveEntity, useShellTitle, useUnsavedGuard, placed } from "@ferrum/kit";
 import { refresh, requestQuery, sendRequest } from "./data";
-import { Editor, useBoxes } from "./Editor";
+import { type Boxes, Editor, useBoxes } from "./Editor";
 import { pageSizes, type SignRequest } from "./model";
 import { colourOf } from "./placement";
 import { addSigner, bodyOf, boxCounts, changed, type Draft, draftOf, editSigner, looksLikeEmail, moveSigner, type Problem, removeSigner, sendProblems, type SignerDraft, turns } from "./send";
@@ -41,6 +41,7 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
   const id = request.id;
   const base = useRef(request);
   const ed = useBoxes(draftOf(request).boxes);
+  const [docNo, setDocNo] = useState(1);
   const [form, setForm] = useState(() => {
     const { boxes: _boxes, ...rest } = draftOf(request);
     return rest;
@@ -134,6 +135,21 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
 
   const problems = sendProblems(draft, today);
   const pages = pageSizes(request);
+  // The request's documents: the main one, then the further ones. The editor shows one at a time, with that document's boxes.
+  const docs = [
+    { n: 1, name: request.document_name ?? "document.pdf", path: request.document ?? null, pages },
+    ...(request.more_documents ?? []).map((d, i) => ({ n: i + 2, name: d.document_name ?? `document ${i + 2}.pdf`, path: d.document ?? null, pages: pageSizes(d) })),
+  ];
+  const inDoc = (b: { document_no?: number }) => (b.document_no ?? 1) === docNo;
+  const onDoc: Boxes = {
+    ...ed,
+    boxes: ed.boxes.filter(inDoc),
+    set: (next) =>
+      ed.set((prev) => {
+        const mine = typeof next === "function" ? next(prev.filter(inDoc)) : next;
+        return [...prev.filter((b) => !inDoc(b)), ...mine.map((b) => (docNo > 1 ? { ...b, document_no: docNo } : b))];
+      }),
+  };
   const at = STEPS.findIndex((s) => s.id === step);
   const roles = draft.signers.filter((s) => s.role.trim()).map((s) => ({ role: s.role, label: s.name.trim() || s.role }));
 
@@ -188,13 +204,24 @@ function Prepare({ request, step }: { request: SignRequest; step: StepId }) {
       {error && <Alert tone="error">{isolate(error)}</Alert>}
 
       {step === "signers" && <SignersStep draft={draft} apply={apply} rows={rows} problems={problems} />}
+      {step === "fields" && docs.length > 1 && (
+        <div role="tablist" aria-label={t("Documents")} className="row" style={{ marginBottom: 8 }}>
+          {docs.map((d) => (
+            <Button key={d.n} size="sm" role="tab" aria-selected={d.n === docNo} variant={d.n === docNo ? "primary" : undefined} onClick={() => setDocNo(d.n)}>
+              {isolate(`${d.n}. ${d.name}`)}
+            </Button>
+          ))}
+        </div>
+      )}
       {step === "fields" && (
         <Editor
-          ed={ed}
+          key={docNo}
+          ed={onDoc}
+          all={ed.boxes}
           roles={roles}
-          pages={pages}
-          document={request.document}
-          onPdf={() => download(request.document ?? "", request.document_name ?? "document.pdf").catch((e) => toast(errorMessage(e), "error"))}
+          pages={docs.find((d) => d.n === docNo)?.pages ?? pages}
+          document={docs.find((d) => d.n === docNo)?.path ?? request.document}
+          onPdf={() => download(docs.find((d) => d.n === docNo)?.path ?? request.document ?? "", docs.find((d) => d.n === docNo)?.name ?? "document.pdf").catch((e) => toast(errorMessage(e), "error"))}
         />
       )}
       {step === "review" && <Review request={request} draft={draft} problems={problems} go={(s) => void go(s)} />}
@@ -304,6 +331,14 @@ export function SignersStep({ draft, apply, rows, problems }: { draft: Draft; ap
                 >
                   <input id={`s-code-${i}`} className="input" value={s.accessCode} autoComplete="off" minLength={4} maxLength={64} onChange={(e) => apply((d) => editSigner(d, s.key, { accessCode: e.target.value }))} />
                 </Field>
+                {s.delivery !== "Link" && (
+                  <Field label={t("How they sign")} htmlFor={`s-delivery-${i}`} hint={s.delivery === "In Person" ? t("You open their page here when they are with you, after checking who they are.") : t("Their link is emailed to them.")}>
+                    <select id={`s-delivery-${i}`} className="input" value={s.delivery} onChange={(e) => apply((d) => editSigner(d, s.key, { delivery: e.target.value as "Email" | "In Person" }))}>
+                      <option value="Email">{t("By email")}</option>
+                      <option value="In Person">{t("In person, here")}</option>
+                    </select>
+                  </Field>
+                )}
               </div>
               {shown("signers")
                 .filter((p) => p.signer === s.key)

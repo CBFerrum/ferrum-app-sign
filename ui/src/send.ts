@@ -3,7 +3,7 @@
 // server is the authority and checks all of this again at `send`; this tells the sender sooner and in
 // words about people rather than fields.
 
-import type { SignRequest, Template } from "./model";
+import type { Delivery, SignRequest, Template } from "./model";
 import { type Box, lacksSignature, newKey, sameBoxes, toBoxes, toRows } from "./placement";
 import { t as tr } from "@ferrum/client";
 
@@ -18,6 +18,8 @@ export interface SignerDraft {
   accessCode: string;
   /** The signer already has a code on the server. */
   hasCode: boolean;
+  /** A mailed link, or hosted here in person (a page another app opens is set by that app). */
+  delivery: Delivery;
 }
 
 export interface Draft {
@@ -44,6 +46,7 @@ export const draftOf = (r: SignRequest): Draft => ({
     signing_order: s.signing_order ?? 1,
     accessCode: "",
     hasCode: !!s.access_code_hash,
+    delivery: s.delivery ?? "Email",
   })),
   boxes: toBoxes(r.fields ?? []),
 });
@@ -60,6 +63,7 @@ export const bodyOf = (d: Draft) => ({
     name: s.name.trim() || null,
     email: s.email.trim() || null,
     signing_order: s.signing_order,
+    delivery: s.delivery,
     ...(s.accessCode ? { access_code: s.accessCode } : {}),
   })),
   fields: toRows(d.boxes),
@@ -82,7 +86,7 @@ export function nextRole(signers: SignerDraft[]): string {
 
 export function addSigner(d: Draft): Draft {
   const last = Math.max(0, ...d.signers.map((s) => s.signing_order));
-  const s: SignerDraft = { key: newKey(), role: nextRole(d.signers), name: "", email: "", signing_order: d.signing_mode === "Parallel" ? 1 : last + 1, accessCode: "", hasCode: false };
+  const s: SignerDraft = { key: newKey(), role: nextRole(d.signers), name: "", email: "", signing_order: d.signing_mode === "Parallel" ? 1 : last + 1, accessCode: "", hasCode: false, delivery: "Email" };
   return { ...d, signers: [...d.signers, s] };
 }
 
@@ -167,6 +171,7 @@ export function boxCounts(boxes: Box[], role: string): string {
     [n("Date Signed") + n("Name"), "automatic"],
     [n("Text"), "text"],
     [n("Checkbox"), "checkbox"],
+    [n("Dropdown") + n("Radio") + n("Number") + n("Attachment"), "answer"],
   ] as const;
   return parts
     .filter(([c]) => c > 0)

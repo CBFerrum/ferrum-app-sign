@@ -6,7 +6,7 @@ import { Editor, useBoxes } from "./Editor";
 import type { SignRequest } from "./model";
 import { draftOf } from "./send";
 import { Review, SignersStep } from "./Prepare";
-import { RequestView } from "./RequestPage";
+import { HostDialog, RequestView } from "./RequestPage";
 import { LinksDialog } from "./Links";
 import { MarkPad, MarkView } from "./Pad";
 import { Requests } from "./Requests";
@@ -47,6 +47,18 @@ const view: SigningView = {
 };
 
 describe("the signer's page, drawn once", () => {
+  it("fetches the document with its headers when the page came with a session", () => {
+    const loc = window.location as { search?: string };
+    loc.search = "?e=SESSION";
+    try {
+      const html = renderToStaticMarkup(<Ready view={view} base="/api/site/acme/sign/signing/T" hasCode={false} call={() => Promise.reject(new Error("no"))} onChange={() => {}} onSigned={() => {}} onDeclined={() => {}} reopen={() => {}} />);
+      expect(html).not.toContain('href="/api/site/acme/sign/signing/T/document"');
+      expect(html).toContain("Download the PDF");
+    } finally {
+      loc.search = "";
+    }
+  });
+
   it("shows the pages with something to do, the steps and the next button", () => {
     const html = renderToStaticMarkup(<Ready view={view} base="/api/site/acme/sign/signing/T" hasCode={false} call={() => Promise.reject(new Error("no"))} onChange={() => {}} onSigned={() => {}} onDeclined={() => {}} reopen={() => {}} />);
     expect(html).toContain("Master Services Agreement");
@@ -162,6 +174,13 @@ describe("the screen that follows a request", () => {
     expect(html).toContain("Download the signed copy");
     expect(html).toContain("Signed copy");
     expect(html).not.toContain("Send a reminder");
+  });
+
+  it("asks the host of an in-person signer to say they checked who is signing", () => {
+    const signer = { ...request().signers[0], delivery: "In Person" as const };
+    const html = renderToStaticMarkup(<HostDialog request={request()} signer={signer} onClose={() => {}} />);
+    expect(html).toContain("I checked that the person signing is");
+    expect(html).toContain("Open their page");
   });
 
   it("says why a request that did not finish ended", () => {

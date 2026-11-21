@@ -7,10 +7,13 @@
 //! * `GET /signing/{token}/document` — the original PDF
 //! * `POST /signing/{token}/sign` — `{consent, signature, initials?, values?}`
 //! * `POST /signing/{token}/decline` — `{reason}`
+//! * `POST /signing/{token}/attachments/{field}` — the file as the body (`X-File-Name` names it), for an Attachment field
 //! * `POST /verify` — a PDF as the body: is it a document sealed here, unchanged?
 //!
-//! The access code, when the signer has one, goes in the `X-Access-Code` header. Signed-in users
-//! have no endpoints here: they work through the records API and the requests' actions.
+//! The access code, when the signer has one, goes in the `X-Access-Code` header; the session of a signer whose link is
+//! not mailed (`signing_link`), in `X-Sign-Session`. The link's token is the only right on these routes: a caller who also
+//! carries a site session (a customer signed in on the workspace's site) is served exactly as anyone, and that person's
+//! context is never read. Signed-in staff work through the records API and the requests' actions.
 
 use crate::signing::{self, Client, Gate, Reply};
 use crate::{clean, pdf, token};
@@ -34,28 +37,35 @@ impl Site for SignSite {
 
     /// `POST /verify` takes a whole PDF, the only route here that does.
     fn max_body_for(&self, method: &str, path: &str) -> usize {
-        if method == "POST" && path.trim_matches('/') == "verify" { pdf::MAX_BYTES + 64 * 1024 } else { self.max_body() }
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+        match (method, parts.as_slice()) {
+            ("POST", ["verify"]) => pdf::MAX_BYTES + 64 * 1024,
+            ("POST", ["signing", _, "attachments", _]) => signing::MAX_ATTACHMENT + 64 * 1024,
+            _ => self.max_body(),
+        }
     }
 
     async fn handle(&self, k: &Kernel, req: SiteRequest) -> Result<SiteResponse> {
-        if req.user.is_some() {
-            return Err(Error::NotFound("endpoint".into()));
-        }
         let path: Vec<&str> = req.path.split('/').filter(|p| !p.is_empty()).collect();
         let client = Client {
             ip: req.client_ip.clone(),
             user_agent: header(&req, "user-agent").map(|u| clean(u, 500)),
             access_code: header(&req, "x-access-code").map(|c| clean(c, 64)),
+            session: header(&req, "x-sign-session").map(|c| clean(c, 64)),
         };
         let tenant = req.tenant;
         let mut resp = match (req.method.as_str(), path.as_slice()) {
-            ("GET", ["s", t]) => page(t)?,
+            ("GET", ["s", t]) => branded_page(k, tenant, t).await?,
             ("GET", ["signing", t]) => signing::view(k, tenant, t, &client).await?.into_response(),
-            ("GET", ["signing", t, "document"]) => match signing::document(k, tenant, t, &client).await? {
+            ("GET", ["signing", t, "document"]) => match signing::document(k, tenant, t, &client, document_number(&req)).await? {
                 Gate::Open((name, bytes)) => pdf_response(&name, bytes),
                 Gate::Gone(m, state) => Reply::Gone(m, state).into_response(),
             },
             ("POST", ["signing", t, "sign"]) => signing::sign(k, tenant, t, &client, &req.body).await?.into_response(),
+            ("POST", ["signing", t, "attachments", field]) => {
+                let name = header(&req, "x-file-name").unwrap_or_default();
+                signing::attach(k, tenant, t, &client, field, name, &req.body).await?.into_response()
+            }
             ("POST", ["signing", t, "decline"]) => signing::decline(k, tenant, t, &client, &req.body).await?.into_response(),
             ("POST", ["signing", t, "code"]) => signing::send_code(k, tenant, t, &client).await?.into_response(),
             ("POST", ["signing", t, "verify"]) => signing::confirm_code(k, tenant, t, &client, &req.body).await?.into_response(),
@@ -68,6 +78,16 @@ impl Site for SignSite {
         }
         Ok(resp)
     }
+}
+
+/// `?n=` of a document request: which document of the request, 1 when absent or not a number.
+fn document_number(req: &SiteRequest) -> usize {
+    req.query
+        .get("n")
+        .and_then(|v| v.as_str().map(str::to_string).or_else(|| v.as_u64().map(|n| n.to_string())))
+        .and_then(|n| n.parse().ok())
+        .filter(|n| (1..=20).contains(n))
+        .unwrap_or(1)
 }
 
 fn pdf_response(name: &str, bytes: Vec<u8>) -> SiteResponse {
@@ -84,16 +104,29 @@ fn pdf_response(name: &str, bytes: Vec<u8>) -> SiteResponse {
 /// asks the API); it loads nothing from elsewhere and runs only its own script. Where the
 /// workspace serves Sign's own interface (`ui/`, at `/sign/s/{workspace}/{token}`) the script hands
 /// over to it; links already sent keep working either way.
+async fn branded_page(k: &Kernel, tenant: uuid::Uuid, token_str: &str) -> Result<SiteResponse> {
+    if token::parse(token_str).is_none() {
+        return Err(Error::NotFound("signing link".into()));
+    }
+    page_with(token_str, &brand_head(k, tenant).await)
+}
+
+#[cfg(test)]
 fn page(token_str: &str) -> Result<SiteResponse> {
+    page_with(token_str, "")
+}
+
+/// The page with `brand` (the stylesheet link of the workspace's brand, or nothing) in its head.
+fn page_with(token_str: &str, brand: &str) -> Result<SiteResponse> {
     if token::parse(token_str).is_none() {
         return Err(Error::NotFound("signing link".into()));
     }
     let nonce = base64::engine::general_purpose::STANDARD.encode(rand::random::<[u8; 16]>());
-    let mut resp = SiteResponse::text(200, "text/html; charset=utf-8", PAGE.replace("__NONCE__", &nonce));
+    let mut resp = SiteResponse::text(200, "text/html; charset=utf-8", PAGE.replace("__NONCE__", &nonce).replace("__BRAND__", brand));
     resp.headers.push((
         "content-security-policy".into(),
         format!(
-            "default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'self'; \
+            "default-src 'none'; script-src 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; \
              frame-src blob:; object-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
         ),
     ));
@@ -101,9 +134,24 @@ fn page(token_str: &str) -> Result<SiteResponse> {
     Ok(resp)
 }
 
+/// The workspace's brand stylesheet (and favicon) for the page's head, when Sign Settings name one; nothing when there is
+/// none or it cannot be read (the page then looks as it always did).
+async fn brand_head(k: &Kernel, tenant: uuid::Uuid) -> String {
+    let found = async {
+        let sys = signing::system(k, tenant).await?;
+        let mut tx = k.db.tenant_tx(tenant).await?;
+        let settings = crate::settings::load(k, &sys, &mut tx).await?;
+        let slug = crate::settings::slug(&mut tx, tenant).await?;
+        tx.commit().await?;
+        Ok::<_, Error>(k.public_brand(tenant, settings.brand, None).await?.map(|b| b.head(&slug)))
+    }
+    .await;
+    found.ok().flatten().unwrap_or_default()
+}
+
 const PAGE: &str = r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex"><title>Sign a document</title>
+<meta name="robots" content="noindex"><title>Sign a document</title>__BRAND__
 <style>
 :root{--fg:#1f2328;--muted:#57606a;--line:#d0d7de;--bg:#f6f8fa;--card:#fff;--accent:#1f6feb;--danger:#cf222e}
 @media (prefers-color-scheme:dark){:root{--fg:#e6edf3;--muted:#8d96a0;--line:#30363d;--bg:#0d1117;--card:#161b22;--accent:#4493f8;--danger:#f85149}}
@@ -257,7 +305,7 @@ label.check{display:flex;gap:8px;align-items:flex-start;font-weight:400}ul{paddi
       card(h('h2', {text: 'Document'}), frame, h('p', {class: 'muted'}, download, ' · SHA-256 ' + req.document_sha256)),
       card(h('h2', {text: 'What you fill in'}), list, form, signature ? signature.el : null,
         initials ? h('label', {text: 'Your initials'}) : null, initials,
-        h('label', {class: 'check'}, consent, h('span', {text: d.consent})), error, h('div', {class: 'row'}, signBtn, declineBtn)));
+        h('label', {class: 'check'}, consent, h('span', {text: d.consent || 'I agree to sign this document electronically and that my electronic signature is as valid as my handwritten one.'})), error, h('div', {class: 'row'}, signBtn, declineBtn)));
     signBtn.onclick = async () => {
       error.textContent = '';
       if (!consent.checked) { error.textContent = 'Tick the box to agree to sign electronically.'; return; }
@@ -309,6 +357,18 @@ mod tests {
         for path in ["verify", "/verify"] {
             assert!(SignSite.max_body_for("POST", path) >= pdf::MAX_BYTES, "POST {path} takes a PDF");
         }
+    }
+
+    /// S4-S1: the page links the workspace's brand stylesheet (from the page's own origin) when it has one, nothing else.
+    #[test]
+    fn the_fallback_page_links_the_brand() {
+        let token = "A".repeat(token::TOKEN_LEN);
+        let plain = String::from_utf8(page(&token).unwrap().body).unwrap();
+        assert!(!plain.contains("/_brand/") && !plain.contains("__BRAND__"));
+        let resp = page_with(&token, r#"<link rel="stylesheet" href="/_brand/acme/1.css?v=abc">"#).unwrap();
+        let csp = resp.headers.iter().find(|(k, _)| k == "content-security-policy").map(|(_, v)| v.clone()).unwrap();
+        assert!(String::from_utf8(resp.body).unwrap().contains(r#"<link rel="stylesheet" href="/_brand/acme/1.css?v=abc">"#));
+        assert!(csp.contains("style-src 'self'") && csp.contains("default-src 'none'"), "{csp}");
     }
 
     #[test]

@@ -1,11 +1,13 @@
 //! Sign reports: requests by status, time to complete, and signatures waiting per signer. Every
-//! query carries the caller's record scope on Sign Request, so a sender sees their own numbers.
-//! Dates are the workspace's local dates.
+//! query carries the caller's record scope on Sign Request, so a sender sees their own numbers, and
+//! groups, filters or aggregates only fields the caller may read (S9 K0-7): a report made of a field
+//! they cannot read is refused, not answered with figures computed from it. Dates are the workspace's
+//! local dates.
 
 use crate::child_table;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
-use ferrum_domain::reports::{Params, ReportCompany, ReportSource, col, param_def, period, read_tx};
+use ferrum_domain::reports::{Params, ReportCompany, ReportSource, col, param_def, period, read_tx, readable_choice};
 use ferrum_domain::util::money;
 use ferrum_kernel::{Action, Ctx, Error, Kernel, Result, Tx, row_scope};
 use rust_decimal::Decimal;
@@ -17,11 +19,17 @@ use uuid::Uuid;
 pub struct SignReports;
 
 const STATUSES: [&str; 7] = ["Draft", "Sent", "In Progress", "Completed", "Declined", "Expired", "Voided"];
-const GROUPS: [(&str, &str); 3] = [
-    ("Month", "to_char(a.completed_at at time zone $2, 'YYYY-MM')"),
-    ("Sender", "coalesce(a.sender_email, 'Unknown')"),
-    ("Template", "coalesce(t.template_name, 'No template')"),
+/// Each grouping: its label, the Sign Request field it reads, and its expression.
+const GROUPS: [(&str, &str, &str); 3] = [
+    ("Month", "completed_at", "to_char(a.completed_at at time zone $2, 'YYYY-MM')"),
+    ("Sender", "sender_email", "coalesce(a.sender_email, 'Unknown')"),
+    ("Template", "template", "coalesce(t.template_name, 'No template')"),
 ];
+
+/// Refused unless the caller may read each of `fields` of `entity`.
+fn need(ctx: &Ctx, entity: &str, fields: &[&str]) -> Result<()> {
+    fields.iter().try_for_each(|f| readable_choice(ctx, entity, f))
+}
 
 /// Requests are not per company: periods follow the workspace's fiscal year.
 fn span(ctx: &Ctx, p: &Params<'_>) -> Result<(NaiveDate, NaiveDate)> {
@@ -58,6 +66,7 @@ fn dec(v: Option<Decimal>) -> Value {
 }
 
 async fn by_status(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
+    need(ctx, "SignRequest", &["status"])?;
     let period = span(ctx, p)?;
     let mut qb = requests(ctx, "a.status, count(*)")?;
     local_date(&mut qb, "created_at", period);
@@ -84,11 +93,15 @@ type TimeRow = (String, i64, Option<Decimal>, Option<Decimal>, Option<Decimal>, 
 async fn completion(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
     let period = span(ctx, p)?;
     let want = p.str("group_by").unwrap_or("Month");
-    let (label, expr) = GROUPS
+    let (label, field, expr) = GROUPS
         .iter()
         .copied()
-        .find(|(l, _)| l.eq_ignore_ascii_case(want))
+        .find(|(l, _, _)| l.eq_ignore_ascii_case(want))
         .ok_or_else(|| Error::field("group_by", format!("use one of: {}", GROUPS.map(|g| g.0).join(", "))))?;
+    need(ctx, "SignRequest", &["status", "sent_at", "completed_at", field])?;
+    if field == "template" {
+        need(ctx, "SignTemplate", &["template_name"])?;
+    }
     let hours = "extract(epoch from (a.completed_at - a.sent_at)) / 3600.0";
     let columns = format!(
         "count(*), round(avg({hours})::numeric, 2), round((percentile_cont(0.5) within group (order by {hours}))::numeric, 2), \
@@ -122,6 +135,7 @@ async fn completion(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
 type PendingRow = (String, Option<String>, i64, Option<DateTime<Utc>>, Option<DateTime<Utc>>);
 
 async fn pending(ctx: &Ctx, tx: &mut Tx) -> Result<Value> {
+    need(ctx, "SignRequest", &["status", "expires_at", "signers"])?;
     let signers = child_table(ctx, "SignRequest", "signers")?;
     let ent = ctx.schema.entity("SignRequest").ok_or_else(|| Error::NotFound("SignRequest".into()))?;
     let scope = row_scope(ctx, ent, Action::Read)?;

@@ -59,7 +59,7 @@ export interface Role {
   label: string;
 }
 
-export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes; roles: Role[]; pages: Size[]; onPdf?: () => void; document?: string | null }) {
+export function Editor({ ed, roles, pages, onPdf, document: path, all }: { ed: Boxes; roles: Role[]; pages: Size[]; onPdf?: () => void; document?: string | null; all?: Box[] }) {
   const { boxes } = ed;
   const pdf = usePdf(path ? () => fetch(path, { credentials: "same-origin" }).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText)))) : null, path ?? "");
   const names = roles.map((r) => r.role);
@@ -75,7 +75,8 @@ export function Editor({ ed, roles, pages, onPdf, document: path }: { ed: Boxes;
   const sheets = useRef(new Map<number, HTMLDivElement>());
   const role = names.some((r) => r === active) ? active : (names[0] ?? "");
   const sel = boxes.find((b) => b.key === selected) ?? null;
-  const missing = lacksSignature(boxes, names);
+  // With several documents, the signature a signer needs may be on any of them.
+  const missing = lacksSignature(all ?? boxes, names);
 
   const update = (key: string, change: Partial<Box>) => ed.set((prev) => prev.map((b) => (b.key === key ? { ...b, ...change } : b)));
   const focusBox = (key: string) =>
@@ -483,6 +484,35 @@ function Inspector({ box: b, roles, pages, onChange, onDuplicate, onEveryPage, o
         {!auto && (
           <Field label={t("Label")} htmlFor="ins-label" hint={t("What the signer sees, such as “Company name”.")}>
             <input id="ins-label" className="input" value={b.label} maxLength={100} onChange={(e) => onChange({ label: e.target.value })} />
+          </Field>
+        )}
+        {(b.field_type === "Dropdown" || b.field_type === "Radio") && (
+          <Field label={t("Choices")} htmlFor="ins-options" hint={t("One per line, at most 50.")}>
+            <textarea
+              id="ins-options"
+              className="input"
+              rows={4}
+              value={(b.options ?? []).join("\n")}
+              onChange={(e) => onChange({ options: e.target.value.split("\n").slice(0, 50) })}
+            />
+          </Field>
+        )}
+        {b.field_type === "Number" && (
+          <div className="form-grid" style={{ "--cols": 3, gap: "8px 12px" } as CSSProperties}>
+            <Field label={t("Smallest")} htmlFor="ins-min">
+              <input id="ins-min" className="input num" inputMode="decimal" maxLength={40} value={b.min_value ?? ""} onChange={(e) => onChange({ min_value: e.target.value })} />
+            </Field>
+            <Field label={t("Largest")} htmlFor="ins-max">
+              <input id="ins-max" className="input num" inputMode="decimal" maxLength={40} value={b.max_value ?? ""} onChange={(e) => onChange({ max_value: e.target.value })} />
+            </Field>
+            <Field label={t("Places")} htmlFor="ins-places">
+              <input id="ins-places" className="input num" type="number" min={0} max={6} value={b.decimals ?? 0} onChange={(e) => onChange({ decimals: Math.min(Math.max(Math.round(Number(e.target.value) || 0), 0), 6) })} />
+            </Field>
+          </div>
+        )}
+        {b.field_type === "Attachment" && (
+          <Field label={t("Kinds of file")} htmlFor="ins-accept" hint={t("pdf, png, jpg; empty for all three.")}>
+            <input id="ins-accept" className="input" maxLength={100} value={b.accept ?? ""} onChange={(e) => onChange({ accept: e.target.value })} />
           </Field>
         )}
         {!auto && (

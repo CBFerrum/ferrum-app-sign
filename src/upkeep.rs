@@ -14,7 +14,9 @@ use uuid::Uuid;
 
 /// Items handled per tenant and step in one round.
 const BATCH: i64 = 100;
-/// Sealing is retried this long after the request last changed (the last signature seals at once).
+/// Sealing is retried this long after the request last changed (the last signature seals at once). Which requests wait
+/// for it is `seal::ready` in SQL: in progress, unsealed, signed by everyone who signs (`request::signed_by_all`). Old
+/// Completed requests without a seal are tried at once (`seal::legacy`).
 const SEAL_RETRY_MINUTES: i64 = 2;
 
 pub async fn run(k: &Kernel, tenant: Uuid) -> Result<()> {
@@ -24,7 +26,9 @@ pub async fn run(k: &Kernel, tenant: Uuid) -> Result<()> {
         ("sending", crate::envelope::send_pending(k, &ctx).await),
         ("expiry", expire(k, &ctx).await),
         ("reminders", remind(k, &ctx).await),
+        ("bulk sending", crate::bulk::send_due(k, &ctx).await),
         ("sealing", reseal(k, &ctx).await),
+        ("seal check", check_seals(k, &ctx).await),
     ];
     for (step, outcome) in steps {
         match outcome {
@@ -101,6 +105,7 @@ async fn remind(k: &Kernel, ctx: &Ctx) -> Result<usize> {
     let due: Vec<(Uuid, Uuid)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select s.parent_id, s.id from {signers} s join e_sign_request r on r.tenant_id = s.tenant_id and r.id = s.parent_id \
          where s.tenant_id = $1 and r.status in ('Sent', 'In Progress') and r.expires_at > now() and s.status in ('Sent', 'Viewed') \
+         and coalesce(s.delivery, 'Email') = 'Email' \
          and coalesce(s.reminders_sent, 0) < coalesce(r.max_reminders, $2) and coalesce(r.reminder_every_days, $3) > 0 \
          and greatest(s.sent_at, s.last_reminded_at) <= now() - make_interval(days => coalesce(r.reminder_every_days, $3)::int) \
          order by greatest(s.sent_at, s.last_reminded_at) limit {BATCH}"
@@ -153,10 +158,15 @@ async fn remind(k: &Kernel, ctx: &Ctx) -> Result<usize> {
 async fn reseal(k: &Kernel, ctx: &Ctx) -> Result<usize> {
     let signers = child_table(ctx, "SignRequest", "signers")?;
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
+    // Fully signed requests still in progress (the retry of a seal that failed), and old Completed ones an earlier release
+    // left without their seal, whatever their signers say: they are sealed, or a person is told.
     let ids: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "select r.id from e_sign_request r where r.tenant_id = $1 and r.status = 'In Progress' and r.sealed_document is null \
-         and r.updated_at < now() - make_interval(mins => {SEAL_RETRY_MINUTES}) \
-         and not exists (select 1 from {signers} s where s.tenant_id = r.tenant_id and s.parent_id = r.id and s.status is distinct from 'Signed') \
+        "select r.id from e_sign_request r where r.tenant_id = $1 and r.sealed_document is null and ( \
+           (r.status = 'In Progress' and r.updated_at < now() - make_interval(mins => {SEAL_RETRY_MINUTES}) \
+            and exists (select 1 from {signers} s where s.tenant_id = r.tenant_id and s.parent_id = r.id and s.status = 'Signed') \
+            and not exists (select 1 from {signers} s where s.tenant_id = r.tenant_id and s.parent_id = r.id and s.status is distinct from 'Signed' \
+              and s.status is distinct from 'Not Needed' and s.action is distinct from 'Receive a Copy')) \
+           or r.status = 'Completed') \
          order by r.updated_at limit 20"
     )))
     .bind(ctx.tenant)
@@ -167,4 +177,27 @@ async fn reseal(k: &Kernel, ctx: &Ctx) -> Result<usize> {
         Error::Invalid(m) => Error::Invalid(format!("sealing failed: {m}")),
         other => other,
     })
+}
+
+/// Once no Completed request lacks its seal, has the database check `sign_completed_is_sealed` over the rows that were
+/// there before it was added (`not valid`, `sql/002`). The check only reads (it holds no write), a second run finds nothing
+/// to do, and while one such request is left it waits.
+async fn check_seals(k: &Kernel, ctx: &Ctx) -> Result<usize> {
+    let mut tx = k.db.tenant_tx(ctx.tenant).await?;
+    let unchecked: bool = sqlx::query_scalar(
+        "select exists (select 1 from pg_constraint where conname = 'sign_completed_is_sealed' and conrelid = 'e_sign_request'::regclass and not convalidated)",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let left: bool = unchecked
+        && sqlx::query_scalar("select exists (select 1 from e_sign_request where status = 'Completed' and (sealed_document is null or sealed_sha256 is null))")
+            .fetch_one(&mut *tx)
+            .await?;
+    if !unchecked || left {
+        tx.rollback().await?;
+        return Ok(0);
+    }
+    sqlx::query("alter table e_sign_request validate constraint sign_completed_is_sealed").execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(1)
 }

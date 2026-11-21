@@ -209,6 +209,27 @@ struct T {
     store: Arc<MemStore>,
     /// Sign's own handle on the vault, as its registration was given it: what reads its secret fields.
     sign: ferrum_kernel::vault::Vault,
+    /// The handles of the test's own apps (each package of `boot_with`'s, as an app of its name).
+    apps: HashMap<String, ferrum_kernel::vault::Vault>,
+}
+
+/// The server's mailer in memory: `(to, subject, html, attached file names)`.
+#[derive(Default)]
+struct TestMailer(Mutex<Vec<(String, String, String, Vec<String>)>>);
+
+#[async_trait::async_trait]
+impl ferrum_kernel::Mailer for TestMailer {
+    async fn send(&self, to: &str, subject: &str, html: &str) -> ferrum_kernel::Result<()> {
+        self.0.lock().unwrap().push((to.into(), subject.into(), html.into(), vec![]));
+        Ok(())
+    }
+    fn can_attach(&self) -> bool {
+        true
+    }
+    async fn send_with(&self, to: &str, subject: &str, html: &str, files: &[ferrum_kernel::MailAttachment]) -> ferrum_kernel::Result<()> {
+        self.0.lock().unwrap().push((to.into(), subject.into(), html.into(), files.iter().map(|f| f.file_name.clone()).collect()));
+        Ok(())
+    }
 }
 
 struct Tenant {
@@ -329,21 +350,27 @@ impl T {
 
     /// One call to the public site, as the server hands it to the package.
     async fn site(&self, t: &Tenant, method: &str, path: &str, code: Option<&str>, body: Vec<u8>) -> Result<SiteResponse, Error> {
+        let code: Vec<(&str, &str)> = code.map(|c| ("x-access-code", c)).into_iter().collect();
+        self.site_with(t, method, path, &code, body).await
+    }
+
+    /// [`site`](Self::site) with the request's headers (`user-agent` by default).
+    async fn site_with(&self, t: &Tenant, method: &str, path: &str, extra: &[(&str, &str)], body: Vec<u8>) -> Result<SiteResponse, Error> {
+        self.site_as(t, None, method, path, extra, body).await
+    }
+
+    /// [`site_with`](Self::site_with) for a caller who carries a site session (a signed-in customer): the platform hands the
+    /// package that person's context.
+    async fn site_as(&self, t: &Tenant, user: Option<&Ctx>, method: &str, path: &str, extra: &[(&str, &str)], body: Vec<u8>) -> Result<SiteResponse, Error> {
         let mut headers = Map::new();
         headers.insert("user-agent".into(), json!("Mozilla/5.0 (it) Firefox/140.0"));
-        if let Some(c) = code {
-            headers.insert("x-access-code".into(), json!(c));
+        for (k, v) in extra {
+            headers.insert(k.to_string(), json!(v));
         }
-        let req = SiteRequest {
-            tenant: t.id,
-            user: None,
-            method: method.into(),
-            path: path.into(),
-            query: Map::new(),
-            headers,
-            body,
-            client_ip: "203.0.113.7".into(),
-        };
+        let (path, query) = path.split_once('?').unwrap_or((path, ""));
+        let query: Map<String, Value> = query.split('&').filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), json!(v))).collect();
+        let req =
+            SiteRequest { tenant: t.id, user: user.cloned(), method: method.into(), path: path.into(), query, headers, body, client_ip: "203.0.113.7".into() };
         let resp = self.k.hooks.site("sign").expect("sign site").handle(&self.k, req).await?;
         assert!(resp.headers.iter().any(|(k, v)| k == "cache-control" && v == "no-store"));
         Ok(resp)
@@ -425,7 +452,12 @@ async fn mailed_code(t: &T, acme: &Tenant, token: &str, phone: &str) -> String {
 /// The latest code the test channel delivered to `phone`.
 async fn texted_code(t: &T, acme: &Tenant, phone: &str) -> String {
     let mut tx = t.k.db.system_tx().await.unwrap();
-    sqlx::query("update job set run_at = now() where status = 'queued'").execute(&mut *tx).await.unwrap();
+    // Only rows this statement can lock, and only those still in the future: another scenario's runner may hold the rest
+    // (two statements making every workspace's jobs due, in different orders, deadlocked: 40P01).
+    sqlx::query("update job set run_at = now() where id in (select id from job where status = 'queued' and run_at > now() for update skip locked)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
     while t.k.run_jobs_once(4).await.unwrap() > 0 {}
     let sent = ferrum_kernel::messages::test_deliveries(acme.id).into_iter().rev().find(|d| d.0 == phone).expect("the code was delivered");
@@ -448,7 +480,6 @@ async fn scenario() {
     ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("app packages"));
-    packages.extend(ferrum_app_comms::packages().expect("mail packages"));
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
@@ -459,17 +490,12 @@ async fn scenario() {
         sign = Some(h.vault());
     });
     hooks.own("sign", &sign_packages);
-    hooks.app("comms", &[], ferrum_app_comms::register);
-    let comms_packages: Vec<String> = ferrum_app_comms::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
-    hooks.own("comms", &comms_packages);
-    for source in ferrum_app_sign::reports() {
-        ferrum_domain::reports::add_source(source);
-    }
+    ferrum_domain::reports::set_sources(ferrum_app_sign::reports().into_iter().map(|r| ("sign".to_string(), r)).collect()).expect("Sign's reports");
     let settings = KernelSettings { pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     let store = Arc::new(MemStore::default());
     k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
+    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle"), apps: HashMap::new() };
 
     // ───────────── a workspace without Mail, in New York ─────────────
     let acme = t.tenant("acme", &["sign"], "America/New_York").await;
@@ -1125,7 +1151,7 @@ async fn scenario() {
         {"type": "generate", "template": "x_quote.letter"},
         {"type": "invoke", "capability": "sign.sign_request.create", "input": {"values":
             "{'title': doc.title, 'document': results[0].url, 'source_sha256': results[0].sha256, 'send_on_create': true, 'reference_entity': 'XQuote', \
-              'reference_id': doc.id, 'signers': [{'role': 'Customer', 'name': doc.customer, 'email': doc.customer_email}]}"}},
+              'reference_id': doc.id, 'verify_identity': 'None', 'signers': [{'role': 'Customer', 'name': doc.customer, 'email': doc.customer_email}]}"}},
         {"type": "set_fields", "values": {"status": "'Out for Signature'"}}]});
     let custom = |op: Value| -> ferrum_kernel::customize::NewCustomization { serde_json::from_value(json!({"entity": "XQuote", "op": op})).unwrap() };
     t.k.batch_customizations(&acme.admin, vec![custom(json!({"op": "define_entity", "entity": quote}))], false).await.map_err(|(_, e)| e).expect("the entity");
@@ -1176,42 +1202,6 @@ async fn scenario() {
     let other = json!({"title": "Swapped", "document": t.upload(&asha, "x.pdf", &pdf).await, "source_sha256": "00".repeat(32), "send_on_create": true,
         "signers": [{"role": "C", "name": "C", "email": "c@x.test"}]});
     assert!(refused(t.k.insert(&asha, "SignRequest", obj(other)).await, "invalid").contains("not the one generated"));
-
-    // ───────────── a workspace with Mail: links and sealed copies are emailed ─────────────
-    let globex = t.tenant("globex", &["sign", "comms"], "UTC").await;
-    let gina = t.user(&globex, "gina@globex.test", "Gina Ortiz", &["Sign User"]).await;
-    let gdoc = t.upload(&gina, "po.pdf", &pdf).await;
-    let po = t
-        .k
-        .insert(&gina, "SignRequest", obj(json!({"title": "Purchase Order", "document": gdoc, "signers": [{"role": "Supplier", "name": "Sam Supplier", "email": "sam@supplier.test"}], "fields": [field("Supplier", "Signature", "Sign", 1, 72, 600, 200, 50)]})))
-        .await
-        .unwrap();
-    let po_id = uid(&po);
-    assert!(refused(t.k.run_action(&gina, "SignRequest", po_id, "send", json!({})).await, "invalid").contains("Public URL"), "emailed links must be absolute");
-    // The first send created the settings row with the signing key: complete it.
-    let gsettings = t.list(&globex.admin, "SignSettings", json!({})).await;
-    assert_eq!(gsettings.len(), 1);
-    let stored = t.get(&globex.admin, "SignSettings", uid(&gsettings[0])).await;
-    assert_eq!(stored["signing_key"], json!(true), "the key is a secret: reads only say it is set");
-    t.k.update(&globex.admin, "SignSettings", uid(&gsettings[0]), obj(json!({"public_url": "https://erp.globex.test/"})), None).await.unwrap();
-    let sent = t.action(&gina, po_id, "send", json!({})).await;
-    assert_eq!((sent["signers"][0]["emailed"].clone(), sent["signers"][0].get("url").is_none()), (json!(true), true), "emailed, so no link in the answer");
-    let gsys = t.sys(&globex);
-    let mails = t.list(&gsys, "Communication", json!({"reference_entity": "SignRequest", "reference_id": po_id.to_string()})).await;
-    assert_eq!(mails.len(), 1);
-    assert_eq!((mails[0]["status"].clone(), mails[0]["channel"].clone()), (json!("Queued"), json!("Email")));
-    assert!(mails[0]["recipients"].as_str().unwrap().contains("sam@supplier.test"));
-    let content = mails[0]["content"].as_str().unwrap();
-    let start = content.find("https://erp.globex.test/api/site/globex/sign/s/").expect("absolute signing link in the email");
-    let po_token: String = content[start..].trim_start_matches("https://erp.globex.test/api/site/globex/sign/s/").chars().take(43).collect();
-    refused(t.view(&acme, &po_token, None).await, "not found");
-    let (_, done) = t.sign(&globex, &po_token, None, json!({"consent": true, "signature": {"image": drawn(500, 150)}})).await.unwrap();
-    assert_eq!(done["request_status"], json!("Completed"));
-    let po = t.get(&gina, "SignRequest", po_id).await;
-    let mails = t.list(&gsys, "Communication", json!({"reference_entity": "SignRequest", "reference_id": po_id.to_string()})).await;
-    let copy = mails.iter().find(|m| m["subject"].as_str().unwrap().starts_with("Signed:")).expect("the signer is sent a copy");
-    assert_eq!(copy["attachments"][0]["id"].as_str().unwrap(), &po["sealed_document"].as_str().unwrap()[7..], "the sealed PDF is attached");
-    assert!(copy["content"].as_str().unwrap().contains(po["sealed_sha256"].as_str().unwrap()));
 }
 
 #[test]
@@ -1225,26 +1215,7 @@ fn a_page_where_there_is_no_pdf_service_cannot_start_a_signature() {
 /// on a server with no PDF service. The page cannot be signed, so the press is refused whole: the record keeps its
 /// status, and no request, file or "sent" state is left behind.
 async fn no_pdf_service() {
-    let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
-    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 16, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
-    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
-    let mut packages = ferrum_domain::packages().expect("platform packages");
-    packages.extend(ferrum_app_sign::packages().expect("app packages"));
-    let catalog = Catalog::from_packages(packages).expect("catalog");
-    let mut hooks = HookRegistry::default();
-    ferrum_domain::register(&mut hooks);
-    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
-    let mut sign = None;
-    hooks.app("sign", &sign_packages, |h| {
-        ferrum_app_sign::register(h);
-        sign = Some(h.vault());
-    });
-    hooks.own("sign", &sign_packages);
-    let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
-    let store = Arc::new(MemStore::default());
-    k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
+    let t = boot(KernelSettings::default()).await;
     let acme = t.tenant("acme", &["sign"], "UTC").await;
     let quote = json!({"name": "XQuote", "label": "Quote", "kind": "master", "title_field": "title", "fields": [
         {"name": "title", "type": "data", "required": true}, {"name": "customer", "type": "data"}, {"name": "customer_email", "type": "email"},
@@ -1290,26 +1261,8 @@ fn a_signers_link_goes_through_the_link_host() {
 /// workspace's address changes, to the signing endpoints, which every host of the workspace serves. With an address of
 /// Sign's own, it is as before; with none at all, it is relative, as `sign_end_to_end` shows.
 async fn link_host() {
-    let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
-    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 8, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
-    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
-    let mut packages = ferrum_domain::packages().expect("platform packages");
-    packages.extend(ferrum_app_sign::packages().expect("app packages"));
-    let mut hooks = HookRegistry::default();
-    ferrum_domain::register(&mut hooks);
-    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
-    let mut sign = None;
-    hooks.app("sign", &sign_packages, |h| {
-        ferrum_app_sign::register(h);
-        sign = Some(h.vault());
-    });
-    hooks.own("sign", &sign_packages);
     let settings = KernelSettings { public_url: Some("https://erp.acme.test".into()), link_host: Some("go.acme.test".into()), ..Default::default() };
-    let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
-    let store = Arc::new(MemStore::default());
-    k.set_file_store(store.clone());
-    let t = T { k: k.clone(), store, sign: sign.expect("Sign's handle") };
+    let t = boot(settings).await;
     let acme = t.tenant("acme", &["sign"], "UTC").await;
     let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
     let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
@@ -1335,6 +1288,458 @@ async fn link_host() {
     assert!(link.starts_with("https://sign.acme.test/api/site/acme/sign/s/"), "{link}");
 }
 
+/// A kernel with Sign alone on the suite's database, emptied first.
+async fn boot(settings: KernelSettings) -> T {
+    boot_with(settings, vec![]).await
+}
+
+/// A package of a test's own, from its files.
+fn package(files: &[(&str, &str)]) -> ferrum_meta::Package {
+    let files: std::collections::BTreeMap<String, String> = files.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    ferrum_meta::catalog::load_package_files(&files).expect("the test's package")
+}
+
+/// [`boot`] with packages of the test's own beside Sign's, and Sign's reports.
+async fn boot_with(settings: KernelSettings, extra: Vec<ferrum_meta::Package>) -> T {
+    boot_mailed(settings, extra, None).await
+}
+
+/// [`boot_with`] on a server that has a mailer.
+async fn boot_mailed(settings: KernelSettings, extra: Vec<ferrum_meta::Package>, mail: Option<Arc<TestMailer>>) -> T {
+    let url = std::env::var("FERRUM_SIGN_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_sign_test".into());
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 16, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
+    let mut packages = ferrum_domain::packages().expect("platform packages");
+    packages.extend(ferrum_app_sign::packages().expect("app packages"));
+    let names: Vec<String> = extra.iter().map(|p| p.name().to_string()).collect();
+    packages.extend(extra);
+    let mut hooks = HookRegistry::default();
+    ferrum_domain::register(&mut hooks);
+    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    let mut sign = None;
+    hooks.app("sign", &sign_packages, |h| {
+        ferrum_app_sign::register(h);
+        sign = Some(h.vault());
+    });
+    hooks.own("sign", &sign_packages);
+    let mut apps = HashMap::new();
+    for name in names {
+        // An app's id has dashes where its package's name has underscores.
+        let id = name.replace('_', "-");
+        hooks.app(&id, std::slice::from_ref(&name), |h| {
+            apps.insert(name.clone(), h.vault());
+        });
+        hooks.own(&id, std::slice::from_ref(&name));
+    }
+    let reports = ferrum_app_sign::reports().into_iter().map(|r| ("sign".to_string(), r)).collect();
+    ferrum_domain::reports::set_sources(reports).expect("Sign's reports");
+    let mailer = mail.clone().map(|m| m as Arc<dyn ferrum_kernel::Mailer>);
+    let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, mailer).await.expect("boot");
+    let store = Arc::new(MemStore::default());
+    k.set_file_store(store.clone());
+    T { k, store, sign: sign.expect("Sign's handle"), apps }
+}
+
+/// K0-7 (S9): a role that reads Sign Requests but not some of their fields. Reports group, filter and aggregate only on
+/// what the caller may read: a grouping on a hidden field is refused, and a report whose figures come from a hidden field
+/// is refused rather than answered.
+const AUDIT: &str = "package: sign_audit\nversion: 0.1.0\ndepends: [sign]\nroles:\n  - name: Sign Auditor\n    permissions:\n      \
+- {entity: SignRequest, read: true, hide: [sender_email]}\n      - {entity: SignTemplate, read: true}\n  - name: Sign Clerk\n    permissions:\n      \
+- {entity: SignRequest, read: true, hide: [completed_at, signers]}\n";
+
+#[test]
+fn a_report_refuses_grouping_by_a_field_the_caller_cannot_read() {
+    run(reports_by_readable_fields());
+}
+
+async fn reports_by_readable_fields() {
+    let t = boot_with(KernelSettings::default(), vec![package(&[("package.yaml", AUDIT)])]).await;
+    let acme = t.tenant("acme", &["sign", "sign_audit"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let auditor = t.user(&acme, "audit@acme.test", "Ari Auditor", &["Sign Auditor"]).await;
+    let clerk = t.user(&acme, "clerk@acme.test", "Cy Clerk", &["Sign Clerk"]).await;
+    let pdf = contract_pdf("Report");
+    let draft = json!({"title": "Reported", "document": t.upload(&asha, "r.pdf", &pdf).await,
+        "signers": [{"role": "Client", "name": "Cleo", "email": "cleo@client.test"}], "fields": [field("Client", "Signature", "C", 1, 72, 600, 200, 50)]});
+    let id = uid(&t.k.insert(&asha, "SignRequest", obj(draft)).await.unwrap());
+    let sent = t.action(&asha, id, "send", json!({})).await;
+    t.sign(&acme, &token_of(sent["signers"][0]["url"].as_str().unwrap()), None, json!({"consent": true, "signature": {"text": "Cleo"}})).await.unwrap();
+    let run = |ctx: Ctx, name: &'static str, params: Vec<(&'static str, &'static str)>| {
+        let t = &t;
+        async move {
+            let p: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            ferrum_domain::reports::run(&t.k, &ctx, name, &p).await
+        }
+    };
+    // The auditor reads requests but not who sent them: no grouping by sender; by month and template, yes.
+    let m = refused(run(auditor.clone(), "sign_completion_time", vec![("group_by", "Sender")]).await, "forbidden");
+    assert!(m.contains("sender_email"), "{m}");
+    assert_eq!(run(auditor.clone(), "sign_completion_time", vec![]).await.expect("by month")["totals"]["completed"], json!(1));
+    assert_eq!(run(auditor.clone(), "sign_completion_time", vec![("group_by", "Template")]).await.expect("by template")["rows"][0]["completed"], json!(1));
+    // The clerk cannot read when requests completed, nor their signers: the reports made of those are refused, not
+    // answered with figures computed from them; the count by status, which reads neither, is answered.
+    assert!(refused(run(clerk.clone(), "sign_completion_time", vec![]).await, "forbidden").contains("completed_at"));
+    assert!(refused(run(clerk.clone(), "sign_pending_signatures", vec![]).await, "forbidden").contains("signers"));
+    let counts = run(clerk.clone(), "sign_requests_by_status", vec![]).await.expect("by status");
+    assert_eq!(counts["totals"]["requests"], json!(1));
+}
+
+fn run(scenario: impl std::future::Future<Output = ()> + Send + 'static) {
+    let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
+    rt.block_on(async { tokio::spawn(scenario).await.unwrap() });
+}
+
+#[test]
+fn a_failed_seal_is_retried_with_a_copy_recipient_and_a_group() {
+    run(seal_retries());
+}
+
+/// sign-1: a request whose seal failed is retried by upkeep until it is sealed, once, whoever else is on it (a
+/// recipient of a copy never signs; a group's other members are Not Needed). While it fails, a person is told why
+/// (the sender, or the Sign Managers for a request no person made), once, and the reason stays on the request. And no
+/// request is ever Completed without its seal: the database refuses it.
+async fn seal_retries() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
+    let pdf = contract_pdf("Retry");
+    let backdate = |id: Uuid| {
+        let t = &t;
+        let acme = &acme;
+        async move {
+            t.sql(acme, "update e_sign_request set updated_at = now() - interval '5 minutes' where tenant_id = $1 and id = $2", id).await.unwrap();
+        }
+    };
+    let copy = json!({"title": "With a copy", "signers": [
+            {"role": "Client", "name": "Cleo", "email": "cleo@client.test"},
+            {"role": "Auditor", "name": "Aud", "email": "aud@audit.test", "action": "Receive a Copy"}],
+        "fields": [field("Client", "Signature", "C", 1, 72, 600, 200, 50)]});
+    let group = json!({"title": "With a group", "signers": [
+            {"role": "Director A", "name": "Dee", "email": "dee@board.test", "signing_group": "Directors"},
+            {"role": "Director B", "name": "Dan", "email": "dan@board.test", "signing_group": "Directors"}],
+        "fields": [field("Director A", "Signature", "DA", 1, 72, 100, 200, 50), field("Director B", "Signature", "DB", 1, 320, 100, 200, 50)]});
+    // The group's request is made by no person (as a configured step's may be): its failure goes to the managers.
+    let sys = t.sys(&acme);
+    for (mut draft, who, by_person) in [(copy, "Client", true), (group, "Director A", false)] {
+        draft["document"] = json!(t.upload(&asha, "retry.pdf", &pdf).await);
+        let ctx = if by_person { asha.clone() } else { sys.clone() };
+        let id = uid(&t.k.insert(&ctx, "SignRequest", obj(draft)).await.unwrap());
+        let sent = t.k.run_action(&ctx, "SignRequest", id, "send", json!({})).await.unwrap();
+        let link = sent["signers"].as_array().unwrap().iter().find(|l| l["role"] == json!(who)).unwrap()["url"].as_str().unwrap().to_string();
+        let original: Uuid = t.get(&sys, "SignRequest", id).await["document"].as_str().unwrap()[7..].parse().unwrap();
+
+        // The last signature cannot be sealed: the stored original was changed.
+        let kept = t.store.tamper(original);
+        let (status, signed) = t.sign(&acme, &token_of(&link), None, json!({"consent": true, "signature": {"text": "Signer"}})).await.unwrap();
+        assert_eq!((status, signed["request_status"].clone()), (200, json!("In Progress")), "{who}: signed, not sealed");
+        let r = t.get(&sys, "SignRequest", id).await;
+        assert!(r["sealed_document"].is_null() && r["seal_error"].as_str().unwrap().contains("no longer matches"), "{who}: the reason is kept");
+        let told = if by_person { &asha } else { &mira };
+        let notices = |n: Vec<(String, Option<String>)>| -> Vec<Option<String>> {
+            n.into_iter().filter(|(title, _)| title.contains("could not be sealed")).map(|(_, b)| b).collect()
+        };
+        let first = notices(t.notifications(&acme, told).await);
+        assert_eq!(first.len(), 1, "{who}: a person is told");
+        assert!(first[0].as_deref().unwrap_or_default().contains("no longer matches"), "{who}: with the reason");
+
+        // Still failing: upkeep tries again, says it failed, keeps the reason, tells nobody twice.
+        backdate(id).await;
+        let again = ferrum_app_sign::maintenance(&t.k, acme.id).await;
+        assert!(again.as_ref().is_err_and(|e| e.to_string().contains("sealing failed")), "{who}: upkeep tried and failed: {again:?}");
+        assert_eq!(t.get(&sys, "SignRequest", id).await["status"], json!("In Progress"));
+        assert_eq!(notices(t.notifications(&acme, told).await).len(), 1, "{who}: told once");
+
+        // No path completes it without its seal, not even a write straight to the table.
+        let bare = t.sql(&acme, "update e_sign_request set status = 'Completed' where tenant_id = $1 and id = $2", id).await;
+        assert!(bare.is_err(), "{who}: the database refuses Completed without a seal");
+        let _ = t.k.update(&mira, "SignRequest", id, obj(json!({"status": "Completed"})), None).await;
+        assert_eq!(t.get(&sys, "SignRequest", id).await["status"], json!("In Progress"), "{who}: a manager cannot complete it either");
+
+        // Mended: the next upkeep seals it, once, however many run at the same moment.
+        t.store.restore(original, kept);
+        backdate(id).await;
+        let (a, b) = tokio::join!(ferrum_app_sign::maintenance(&t.k, acme.id), ferrum_app_sign::maintenance(&t.k, acme.id));
+        a.expect("upkeep");
+        b.expect("upkeep");
+        t.maintenance(&acme).await;
+        let r = t.get(&sys, "SignRequest", id).await;
+        assert_eq!(r["status"], json!("Completed"), "{who}: retried and sealed");
+        assert!(r["sealed_document"].is_string() && r["sealed_sha256"].is_string() && r["seal_error"].is_null());
+        assert_eq!(t.count(&acme, id, "Completed").await, 1, "{who}: sealed exactly once");
+        let sealed: i64 = t.scalar(&acme, "select count(*) from outbox where tenant_id = $1 and topic = 'sign.request_completed' and record_id = $2", id).await;
+        assert_eq!(sealed, 1, "{who}: completed once on the outbox");
+    }
+}
+
+/// S11-G1: two apps of the test's own. `quotes` declares that it uses Sign's create; `nosy` declares nothing of Sign's.
+const QUOTES: &str = "package: quotes\nversion: 0.1.0\ndepends: [sign]\nuses:\n  - {capability: sign.sign_request.create, version: '^0.3'}\n";
+const NOSY: &str = "package: nosy\nversion: 0.1.0\ndepends: [sign]\n";
+
+impl T {
+    /// App `app`'s call for `ctx`'s person, in a transaction of its own committed when it is done.
+    async fn call(&self, app: &str, ctx: &Ctx, inv: ferrum_kernel::capability::Invocation) -> Result<ferrum_kernel::capability::Receipt, Error> {
+        let mut tx = self.k.db.tenant_tx(ctx.tenant).await.unwrap();
+        let done = self.k.call_tx(&self.apps[app], ctx, &mut tx, &inv).await;
+        if done.is_ok() {
+            tx.commit().await.unwrap();
+        } else {
+            tx.rollback().await.unwrap();
+        }
+        done
+    }
+}
+
+#[test]
+fn sign_is_reached_through_its_operations() {
+    run(operations());
+}
+
+/// S11-G1a: another app asks for a signature through the gate, once per key, and is told by events; a request it makes
+/// asks its signers for a code sent to their own address; void says so on the outbox; and the gate refuses an app that
+/// declared no use and a person without the right.
+async fn operations() {
+    use ferrum_kernel::capability::Invocation;
+    let t = boot_with(KernelSettings::default(), vec![package(&[("package.yaml", QUOTES)]), package(&[("package.yaml", NOSY)])]).await;
+    let acme = t.tenant("acme", &["sign", "quotes", "nosy"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let ravi = t.user(&acme, "ravi@acme.test", "Ravi Kumar", &["Sign User"]).await;
+    let sys = t.sys(&acme);
+    let pdf = contract_pdf("Quote");
+    let values = |doc: &str| {
+        json!({"title": "Quote Q-1", "document": doc, "send_on_create": true,
+        "signers": [{"role": "Customer", "name": "Cora", "email": "cora@client.test"}],
+        "fields": [field("Customer", "Signature", "Sign", 1, 72, 600, 200, 50)]})
+    };
+    let doc = t.upload(&asha, "quote.pdf", &pdf).await;
+    let ask = Invocation::new("sign.sign_request.create", json!({"values": values(&doc)})).key("quote:Q-1:1");
+
+    // create_through_call_tx_sends_once_per_key
+    let first = t.call("quotes", &asha, ask.clone()).await.expect("the app's use");
+    let again = t.call("quotes", &asha, ask.clone()).await.expect("the same key");
+    assert!(!first.repeated && again.repeated, "a repeat is answered, not repeated");
+    let id = uid(first.result.as_object().unwrap());
+    assert_eq!(uid(again.result.as_object().unwrap()), id);
+    assert_eq!(t.list(&sys, "SignRequest", json!({})).await.len(), 1, "one request");
+    let r = t.get(&sys, "SignRequest", id).await;
+    assert_eq!((r["status"].clone(), r["sender_email"].clone()), (json!("Sent"), json!("asha@acme.test")), "sent at once, the person its sender");
+    assert_eq!(t.trail(&acme, id).await, vec!["Sent:Customer"], "sent once");
+
+    // requests_from_apps_ask_for_an_email_code_by_default
+    assert_eq!(r["verify_identity"], json!("Email Code"));
+    let key = t.key(&acme).await;
+    let cora = token_for(&key, acme.id, id, uid(&signer_row(&r, "Customer")), "cora@client.test");
+    let signs = json!({"consent": true, "signature": {"text": "Cora"}});
+    assert!(refused(t.sign(&acme, &cora, None, signs.clone()).await, "forbidden").contains("confirm the code"));
+    let mine =
+        t.k.insert(
+            &asha,
+            "SignRequest",
+            obj(json!({"title": "Mine", "document": t.upload(&asha, "m.pdf", &pdf).await,
+        "signers": [{"role": "C", "name": "Cy", "email": "cy@x.test"}], "fields": [field("C", "Signature", "S", 1, 72, 600, 200, 50)]})),
+        )
+        .await
+        .unwrap();
+    assert!(mine["verify_identity"].is_null(), "a request made on the screen asks for no code unless chosen");
+
+    // a_caller_without_the_use_is_refused
+    let other = Invocation::new("sign.sign_request.create", json!({"values": values(&t.upload(&asha, "q2.pdf", &pdf).await)})).key("nosy:1");
+    refused(t.call("nosy", &asha, other).await, "forbidden");
+    let void = Invocation::new("sign.sign_request.void", json!({"id": id, "params": {"reason": "x"}})).key("void:1");
+    refused(t.call("quotes", &asha, void).await, "forbidden");
+    assert_eq!(t.list(&sys, "SignRequest", json!({})).await.len(), 2, "nothing made by a refused call");
+
+    // a_sign_user_cannot_void_another_users_request
+    let theirs = Invocation::new("sign.sign_request.void", json!({"id": id, "params": {"reason": "not mine"}})).key("ravi:void");
+    assert!(t.k.invoke(&ravi, theirs).await.is_err(), "Ravi cannot void Asha's request");
+    assert_eq!(t.get(&sys, "SignRequest", id).await["status"], json!("Sent"));
+
+    // void_says_so_on_the_outbox, through the gate with a key
+    let voided =
+        t.k.invoke(&asha, Invocation::new("sign.sign_request.void", json!({"id": id, "params": {"reason": "Price changed"}})).key("asha:void")).await.unwrap();
+    assert_eq!(voided.result["status"], json!("Voided"));
+    let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+    let rows: Vec<Value> = sqlx::query_scalar("select payload from outbox where tenant_id = $1 and topic = 'sign.request_voided' and record_id = $2")
+        .bind(acme.id)
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(rows.len(), 1, "one event");
+    assert_eq!((rows[0]["reason"].clone(), rows[0]["status"].clone()), (json!("Price changed"), json!("Voided")));
+    let (status, _) = t.view(&acme, &cora, None).await.unwrap();
+    assert_eq!(status, 410, "every link refused");
+}
+
+#[test]
+fn a_link_signer_opens_the_page_only_with_a_session() {
+    run(link_delivery());
+}
+
+/// S11-G1b: a signer whose link is not mailed (delivery Link) is signed through a page the requesting app opens with
+/// `signing_link`: a session bound to that signer and a moment at most an hour away. Their bare link opens nothing; a
+/// forged or past session opens nothing; framing needs a site the workspace allows; a person without write on the
+/// request gets no link. Every new device that opens a link is in the trail.
+async fn link_delivery() {
+    use ferrum_kernel::capability::Invocation;
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let ravi = t.user(&acme, "ravi@acme.test", "Ravi Kumar", &["Sign User"]).await;
+    let pdf = contract_pdf("Linked");
+    let draft = json!({"title": "Linked", "document": t.upload(&asha, "l.pdf", &pdf).await,
+        "signers": [{"role": "Guest", "name": "Gil", "email": "gil@guest.test", "delivery": "Link"},
+                    {"role": "Host", "name": "Hana", "email": "hana@acme.test"}],
+        "fields": [field("Guest", "Signature", "G", 1, 72, 600, 200, 50), field("Host", "Signature", "H", 1, 320, 600, 200, 50)],
+        "signing_mode": "Parallel"});
+    let id = uid(&t.k.insert(&asha, "SignRequest", obj(draft)).await.unwrap());
+    let sent = t.action(&asha, id, "send", json!({})).await;
+    let rows = sent["signers"].as_array().unwrap();
+    let guest_row = rows.iter().find(|l| l["role"] == json!("Guest")).unwrap();
+    assert!(guest_row.get("url").is_none() && guest_row["delivery"] == json!("Link"), "no link handed out for the app's signer: {guest_row}");
+    let r = t.get(&asha, "SignRequest", id).await;
+    let key = t.key(&acme).await;
+    let gil = token_for(&key, acme.id, id, uid(&signer_row(&r, "Guest")), "gil@guest.test");
+    refused(t.view(&acme, &gil, None).await, "not found");
+
+    // A person who may not change the request gets no link.
+    let ask = |minutes: i64, embed: bool| {
+        Invocation::new("sign.sign_request.signing_link", json!({"id": id, "params": {"signer": "Guest", "minutes": minutes, "embed": embed}}))
+    };
+    assert!(t.k.invoke(&ravi, ask(10, false).key("ravi")).await.is_err(), "Ravi cannot issue Asha's signer a link");
+    assert!(
+        t.k.invoke(&asha, Invocation::new("sign.sign_request.signing_link", json!({"id": id, "params": {"signer": "Host"}})).key("host")).await.is_err(),
+        "a mailed signer's link is not issued this way"
+    );
+    assert!(t.k.invoke(&asha, ask(61, false).key("long")).await.is_err(), "at most an hour");
+    let m = refused(t.k.invoke(&asha, ask(10, true).key("framed")).await, "invalid");
+    assert!(m.contains("allow"), "framing needs an allowed site: {m}");
+
+    let given = t.k.invoke(&asha, ask(10, false).key("asha:1")).await.expect("a link").result;
+    let url = given["url"].as_str().unwrap().to_string();
+    assert!(url.contains(&format!("/sign/s/acme/{gil}?e=")) && !url.contains("embed"), "{url}");
+    let session = url.split("?e=").nth(1).unwrap().to_string();
+    let open = |session: String| {
+        let (t, acme, gil) = (&t, &acme, gil.clone());
+        async move { t.site_with(acme, "GET", &format!("/signing/{gil}"), &[("x-sign-session", &session)], vec![]).await }
+    };
+    assert_eq!(open(session.clone()).await.expect("the page opens").status, 200);
+    assert!(t.trail(&acme, id).await.contains(&"Link Issued:Guest".to_string()));
+    // Forged, another signer's, or past its moment: nothing.
+    let host = uid(&signer_row(&r, "Host"));
+    for bad in [
+        format!("{}A", &session[..session.len() - 1]),
+        session_for(&key, acme.id, host, "gil@guest.test", chrono::Utc::now().timestamp() + 600),
+        session_for(&key, acme.id, uid(&signer_row(&r, "Guest")), "gil@guest.test", chrono::Utc::now().timestamp() - 1),
+    ] {
+        refused(open(bad).await, "not found");
+    }
+
+    // Framed, once the workspace allows a site for the signing page.
+    t.k.insert(&acme.admin, "Embedding", obj(json!({"page": "sign/s", "origins": "https://partner.example"}))).await.expect("an embedding");
+    let framed = t.k.invoke(&asha, ask(5, true).key("asha:2")).await.expect("a framed link").result;
+    assert!(framed["url"].as_str().unwrap().ends_with("&embed=1"));
+
+    // Devices: the same browser again is nothing new; another one is in the trail.
+    open(session.clone()).await.unwrap();
+    assert_eq!(t.count(&acme, id, "Viewed").await, 1);
+    t.site_with(&acme, "GET", &format!("/signing/{gil}"), &[("x-sign-session", &session), ("user-agent", "Other/1.0")], vec![]).await.unwrap();
+    assert_eq!(t.count(&acme, id, "Viewed").await, 2, "another device is recorded");
+    let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+    let details: Vec<Option<String>> =
+        sqlx::query_scalar("select details from e_sign_event where tenant_id = $1 and request = $2 and event = 'Viewed' order by seq")
+            .bind(acme.id)
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(details, [None, Some("another device".to_string())]);
+
+    // No reminder goes to a signer whose page the app opens.
+    t.sql(&acme, "update e_sign_request__signers set sent_at = now() - interval '9 days' where tenant_id = $1 and parent_id = $2", id).await.unwrap();
+    t.maintenance(&acme).await;
+    let reminded = t.trail(&acme, id).await.into_iter().filter(|e| e.starts_with("Reminded")).collect::<Vec<_>>();
+    assert_eq!(reminded, ["Reminded:Host"], "the mailed signer only");
+
+    // The session signs.
+    let (status, done) = t
+        .site_with(
+            &acme,
+            "POST",
+            &format!("/signing/{gil}/sign"),
+            &[("x-sign-session", &session)],
+            json!({"consent": true, "signature": {"text": "Gil"}}).to_string().into_bytes(),
+        )
+        .await
+        .map(|r| (r.status, serde_json::from_slice::<Value>(&r.body).unwrap()))
+        .unwrap();
+    assert_eq!((status, done["status"].clone()), (200, json!("Signed")));
+
+    // in_person_needs_a_person_at_the_screen: a host signed in at this screen, who says they checked who signs.
+    let draft = json!({"title": "Counter", "document": t.upload(&asha, "c.pdf", &pdf).await,
+        "signers": [{"role": "Customer", "name": "Cleo", "email": "cleo@client.test", "delivery": "In Person"}],
+        "fields": [field("Customer", "Signature", "C", 1, 72, 600, 200, 50)]});
+    let counter = uid(&t.k.insert(&asha, "SignRequest", obj(draft)).await.unwrap());
+    t.action(&asha, counter, "send", json!({})).await;
+    let host = |checked: bool| json!({"signer": "Customer", "checked_identity": checked});
+    // Asha's context as loaded for a job, a key or an app is not at a screen.
+    let m = refused(t.k.run_action(&asha, "SignRequest", counter, "signing_link", host(true)).await, "forbidden");
+    assert!(m.contains("at this screen"), "{m}");
+    let mut at_screen = asha.clone();
+    at_screen.made = ferrum_kernel::ctx::Made::Screen;
+    assert!(at_screen.at_screen());
+    refused(t.k.run_action(&at_screen, "SignRequest", counter, "signing_link", host(false)).await, "invalid");
+    let given = t.k.run_action(&at_screen, "SignRequest", counter, "signing_link", host(true)).await.expect("hosted");
+    let url = given["url"].as_str().unwrap();
+    let (token, session) = url.rsplit('/').next().unwrap().split_once("?e=").unwrap();
+    let r = t.get(&asha, "SignRequest", counter).await;
+    assert_eq!(signer_row(&r, "Customer")["hosted_by"], json!("asha@acme.test"));
+    let (status, _) = t
+        .site_with(
+            &acme,
+            "POST",
+            &format!("/signing/{token}/sign"),
+            &[("x-sign-session", session)],
+            json!({"consent": true, "signature": {"text": "Cleo"}}).to_string().into_bytes(),
+        )
+        .await
+        .map(|r| (r.status, ()))
+        .unwrap();
+    assert_eq!(status, 200);
+    let r = t.get(&asha, "SignRequest", counter).await;
+    assert_eq!(r["status"], json!("Completed"));
+    let sealed: Uuid = r["sealed_document"].as_str().unwrap()[7..].parse().unwrap();
+    let (_, _, bytes) = t.k.read_file(&asha, sealed).await.unwrap();
+    let parsed = lopdf::Document::load_mem(&bytes).unwrap();
+    let text: String = parsed.get_pages().values().map(|p| String::from_utf8_lossy(&parsed.get_page_content(*p)).to_string()).collect();
+    assert!(text.contains(&hex::encode("hosted")), "the certificate names the host");
+    let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+    let signed: Option<String> = sqlx::query_scalar("select details from e_sign_event where tenant_id = $1 and request = $2 and event = 'Signed'")
+        .bind(acme.id)
+        .bind(counter)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(signed.as_deref(), Some("signature typed; signed in person, hosted by asha@acme.test"));
+}
+
+/// A session computed from the documented format, independently of Sign's code.
+fn session_for(key: &[u8], tenant: Uuid, signer: Uuid, email: &str, expires: i64) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
+    for part in [b"ferrum-sign/session/v1".as_slice(), tenant.as_bytes(), signer.as_bytes(), email.as_bytes(), &expires.to_be_bytes()] {
+        mac.update(&(part.len() as u32).to_be_bytes());
+        mac.update(part);
+    }
+    let mut raw = expires.to_be_bytes().to_vec();
+    raw.extend_from_slice(&mac.finalize().into_bytes()[..16]);
+    URL_SAFE_NO_PAD.encode(raw)
+}
+
 /// What opens the test's vault: the database password of `url`, with Argon2id kept cheap for tests.
 fn opener(url: &str) -> ferrum_kernel::vault::Opener {
     ferrum_kernel::vault::Opener {
@@ -1343,4 +1748,782 @@ fn opener(url: &str) -> ferrum_kernel::vault::Opener {
         kdf: ferrum_kernel::vault::Kdf { m_kib: 64, t: 1, p: 1 },
         ..Default::default()
     }
+}
+
+impl T {
+    /// A statement without parameters in the workspace's schema, as an upgrade's SQL runs.
+    async fn exec(&self, t: &Tenant, sql: &str) {
+        let mut tx = self.k.db.tenant_tx(t.id).await.unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string())).execute(&mut *tx).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+        tx.commit().await.unwrap();
+    }
+
+    async fn scalar0<O: Send + Unpin + for<'r> sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>>(&self, t: &Tenant, sql: &str) -> O {
+        let mut tx = self.k.db.tenant_tx(t.id).await.unwrap();
+        let v = sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_string())).fetch_one(&mut *tx).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+        tx.commit().await.unwrap();
+        v
+    }
+
+    /// Whether the database has checked `sign_completed_is_sealed` over the rows that were there.
+    async fn seal_constraint_checked(&self, t: &Tenant) -> bool {
+        self.scalar0(t, "select convalidated from pg_constraint where conname = 'sign_completed_is_sealed' and conrelid = 'e_sign_request'::regclass").await
+    }
+
+    /// A request with one signer, sent; its draft's file stays the stored original.
+    async fn one_signer_request(&self, sender: &Ctx, title: &str, pdf: &[u8]) -> (Uuid, String) {
+        let draft = json!({"title": title, "document": self.upload(sender, "one.pdf", pdf).await,
+            "signers": [{"role": "Client", "name": "Cleo", "email": "cleo@client.test"}],
+            "fields": [field("Client", "Signature", "C", 1, 72, 600, 200, 50)]});
+        let id = uid(&self.k.insert(sender, "SignRequest", obj(draft)).await.unwrap());
+        let sent = self.action(sender, id, "send", json!({})).await;
+        (id, token_of(sent["signers"][0]["url"].as_str().unwrap()))
+    }
+}
+
+#[test]
+fn a_signed_in_customer_is_served_a_signing_link_like_anyone() {
+    run(signed_in_customer());
+}
+
+/// S4-P4 (20 Nov): a person who carries a site session (a customer signed in on the workspace's site) reaches the
+/// package's public routes as the platform hands them over, with that person's context. The link's token is the right
+/// on these pages, not the session: every route answers exactly as it does for a caller with no session, whatever the
+/// answer is (a page, a refusal, a closed request), and signing leaves the same trail.
+async fn signed_in_customer() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let pdf = contract_pdf("Customer");
+    let (plain, plain_token) = t.one_signer_request(&asha, "Without a session", &pdf).await;
+    let (session, session_token) = t.one_signer_request(&asha, "With a session", &pdf).await;
+    // What a caller gets, whoever they are: status and body, or the refusal.
+    // (The page's CSP nonce is new on every answer: masked.)
+    let answer = |r: Result<ferrum_kernel::SiteResponse, Error>| {
+        r.map(|r| {
+            let mut body = String::from_utf8_lossy(&r.body).into_owned();
+            while let Some(at) = body.find("nonce=\"").map(|i| i + 7) {
+                let end = body[at..].find('"').map_or(body.len(), |e| at + e);
+                body.replace_range(at..end, "N");
+                body.replace_range(at - 7..at - 1, "nonce_");
+            }
+            (r.status, r.content_type, body)
+        })
+        .map_err(|e| format!("{e:?}"))
+    };
+    for who in [None, Some(&asha)] {
+        let open = answer(t.site_as(&acme, who, "GET", &format!("/s/{plain_token}"), &[], vec![]).await);
+        assert!(open.as_ref().is_ok_and(|(status, _, _)| *status == 200), "the page opens for {:?}: {open:?}", who.map(|w| w.email.clone()));
+    }
+    for (what, path, method) in [
+        ("the page", "/s/{t}", "GET"),
+        ("the request", "/signing/{t}", "GET"),
+        ("the document", "/signing/{t}/document", "GET"),
+        ("a link nobody was given", "/signing/not-a-link", "GET"),
+        ("a code asked for", "/signing/{t}/code", "POST"),
+    ] {
+        let path = path.replace("{t}", &plain_token);
+        let without = answer(t.site_as(&acme, None, method, &path, &[], vec![]).await);
+        let with = answer(t.site_as(&acme, Some(&asha), method, &path, &[], vec![]).await);
+        assert_eq!(with, without, "{what}: the same answer with and without a site session");
+    }
+    // Signing: through the session's request and the plain one, the same outcome and the same trail.
+    let body = json!({"consent": true, "signature": {"text": "Cleo Client"}}).to_string().into_bytes();
+    let signed_plain = t.site_as(&acme, None, "POST", &format!("/signing/{plain_token}/sign"), &[], body.clone()).await.unwrap();
+    let signed_session = t.site_as(&acme, Some(&asha), "POST", &format!("/signing/{session_token}/sign"), &[], body).await.unwrap();
+    assert_eq!((signed_session.status, signed_plain.status), (200, 200));
+    let (a, b): (Value, Value) = (serde_json::from_slice(&signed_plain.body).unwrap(), serde_json::from_slice(&signed_session.body).unwrap());
+    assert_eq!((&a["request_status"], &b["request_status"]), (&json!("Completed"), &json!("Completed")));
+    // (The plain request was opened by the page checks above, so its trail has Viewed: the rest is what is compared.)
+    let without_views = |trail: Vec<String>| trail.into_iter().filter(|e| !e.starts_with("Viewed")).collect::<Vec<_>>();
+    assert_eq!(without_views(t.trail(&acme, plain).await), without_views(t.trail(&acme, session).await), "the session changes nothing in the trail");
+    // The person is no one in the trail: the signer is.
+    let actors: Vec<String> = {
+        let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+        let rows = sqlx::query_scalar("select actor from e_sign_event where tenant_id = $1 and request = $2 and event = 'Signed'")
+            .bind(acme.id)
+            .bind(session)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        rows
+    };
+    assert_eq!(actors, vec!["cleo@client.test".to_string()], "the trail names the signer, not the signed-in person");
+    // A finished request answers the same too.
+    for path in [format!("/signing/{plain_token}"), format!("/signing/{plain_token}/document")] {
+        let (without, with) =
+            (answer(t.site_as(&acme, None, "GET", &path, &[], vec![]).await), answer(t.site_as(&acme, Some(&asha), "GET", &path, &[], vec![]).await));
+        assert_eq!(with, without, "{path} once completed");
+    }
+}
+
+/// The migration that adds `sign_completed_is_sealed`, as a workspace's upgrade runs it.
+const SEAL_CONSTRAINT: &str = include_str!("../packages/sign/sql/002_completed_is_sealed.sql");
+
+#[test]
+fn an_old_completed_request_without_its_seal_does_not_stop_the_upgrade() {
+    run(legacy_unsealed());
+}
+
+/// sign-1-window: a workspace that already holds Completed requests without their seal still upgrades (the constraint
+/// is added `not valid`, so no row is checked and no write is held), the database refuses every new completion without a
+/// seal from that moment, upkeep seals the old requests (once, whatever runs together; "Sealed" in the trail, the
+/// original "Completed" kept, nothing sent again) or, for one it cannot seal, tells a person once; and only when no such
+/// row is left does it validate the constraint.
+async fn legacy_unsealed() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let sys = t.sys(&acme);
+    let pdf = contract_pdf("Old");
+    let body = json!({"consent": true, "signature": {"text": "Cleo Client"}});
+    let mut old = vec![];
+    for title in ["Old one", "Old two"] {
+        let (id, token) = t.one_signer_request(&asha, title, &pdf).await;
+        let (status, signed) = t.sign(&acme, &token, None, body.clone()).await.unwrap();
+        assert_eq!((status, signed["request_status"].clone()), (200, json!("Completed")), "{title} was sealed the normal way");
+        old.push(id);
+    }
+    let (kept, stuck) = (old[0], old[1]);
+    // The workspace as an older release left it: no constraint, two Completed requests with no seal.
+    t.exec(&acme, "alter table e_sign_request drop constraint sign_completed_is_sealed").await;
+    for id in &old {
+        t.sql(&acme, "update e_sign_request set sealed_document = null, sealed_sha256 = null where tenant_id = $1 and id = $2", *id).await.unwrap();
+    }
+    let (_pending, _) = t.one_signer_request(&asha, "Still open", &pdf).await;
+    let open: Uuid = t.scalar0(&acme, "select id from e_sign_request where status = 'Sent' limit 1").await;
+
+    // The upgrade: its SQL must go through over those rows, leaving the constraint unchecked.
+    t.exec(&acme, SEAL_CONSTRAINT).await;
+    assert!(!t.seal_constraint_checked(&acme).await, "added not valid: the old rows were not checked");
+    let refused = t.sql(&acme, "update e_sign_request set status = 'Completed' where tenant_id = $1 and id = $2", open).await;
+    assert!(refused.is_err(), "a new completion without a seal is refused from the first moment");
+    assert_eq!(t.scalar0::<i64>(&acme, "select count(*) from e_sign_request where status = 'Completed' and sealed_document is null").await, 2);
+
+    // The stored original of one cannot be read back unchanged: its seal cannot be rebuilt.
+    let original: Uuid = t.get(&sys, "SignRequest", stuck).await["document"].as_str().unwrap()[7..].parse().unwrap();
+    let before = t.store.tamper(original);
+    // Two upkeeps at once: the sealable one is sealed once; the other fails for both and is told once.
+    let (a, b) = tokio::join!(ferrum_app_sign::maintenance(&t.k, acme.id), ferrum_app_sign::maintenance(&t.k, acme.id));
+    assert!(a.is_err() || b.is_err(), "upkeep says the stuck one could not be sealed");
+    let r = t.get(&sys, "SignRequest", kept).await;
+    assert!(r["sealed_document"].is_string() && r["sealed_sha256"].is_string(), "the old request is sealed");
+    assert_eq!(r["status"], json!("Completed"));
+    assert_eq!(t.count(&acme, kept, "Completed").await, 1, "its completion is not recorded again");
+    assert_eq!(t.count(&acme, kept, "Sealed").await, 1, "sealed exactly once, however many upkeeps ran");
+    assert_eq!(t.action(&asha, kept, "verify", json!({})).await["valid"], json!(true), "the trail still verifies");
+    let r = t.get(&sys, "SignRequest", stuck).await;
+    assert!(r["sealed_document"].is_null());
+    assert_eq!(t.count(&acme, stuck, "Seal Failed").await, 1, "a person is told in the trail once");
+    let told = |n: Vec<(String, Option<String>)>| n.into_iter().filter(|(title, _)| title.contains("could not be sealed")).count();
+    assert_eq!(told(t.notifications(&acme, &asha).await), 1);
+    assert!(ferrum_app_sign::maintenance(&t.k, acme.id).await.is_err());
+    assert_eq!((t.count(&acme, stuck, "Seal Failed").await, told(t.notifications(&acme, &asha).await)), (1, 1), "told once, not every minute");
+    assert!(!t.seal_constraint_checked(&acme).await, "not validated while an unsealed Completed request is left");
+
+    // Mended: sealed, and only now is the constraint checked, by upkeep, safe to repeat.
+    t.store.restore(original, before);
+    t.maintenance(&acme).await;
+    let r = t.get(&sys, "SignRequest", stuck).await;
+    assert!(r["sealed_document"].is_string() && r["sealed_sha256"].is_string());
+    assert_eq!((t.count(&acme, stuck, "Completed").await, t.count(&acme, stuck, "Sealed").await), (1, 1));
+    assert_eq!(t.action(&asha, stuck, "verify", json!({})).await["valid"], json!(true));
+    assert!(t.seal_constraint_checked(&acme).await, "validated once no unsealed Completed request is left");
+    t.maintenance(&acme).await;
+    assert!(t.seal_constraint_checked(&acme).await);
+    let refused = t.sql(&acme, "update e_sign_request set status = 'Completed' where tenant_id = $1 and id = $2", open).await;
+    assert!(refused.is_err(), "and still refuses a completion without a seal");
+}
+
+#[test]
+fn signers_get_the_workspaces_own_wording_and_brand() {
+    run(wording());
+}
+
+/// S11-G4: a workspace without the Mail app, on a server with a mailer. Links and signed copies are sent from the
+/// package's message templates (through the platform's messages, not Comms' records): the workspace's edit of a template
+/// is in the next mail; the signing link is a secret value, so the message log holds a placeholder, never the token; the
+/// signing page carries the workspace's brand and its own consent sentence.
+async fn wording() {
+    let mail = Arc::new(TestMailer::default());
+    let t = boot_mailed(KernelSettings::default(), vec![], Some(mail.clone())).await;
+    let globex = t.tenant("globex", &["sign"], "UTC").await;
+    let gina = t.user(&globex, "gina@globex.test", "Gina Ortiz", &["Sign User"]).await;
+    let pdf = contract_pdf("Wording");
+    let order = |title: &str| {
+        json!({"title": title, "document": null, "signers": [{"role": "Supplier", "name": "Sam Supplier", "email": "sam@supplier.test"}],
+            "fields": [field("Supplier", "Signature", "Sign", 1, 72, 600, 200, 50)]})
+    };
+    let make = |title: &'static str| {
+        let (t, gina, pdf) = (&t, &gina, &pdf);
+        async move {
+            let mut draft = order(title);
+            draft["document"] = json!(t.upload(gina, "po.pdf", pdf).await);
+            uid(&t.k.insert(gina, "SignRequest", obj(draft)).await.unwrap())
+        }
+    };
+    let po_id = make("Purchase Order").await;
+    assert!(refused(t.k.run_action(&gina, "SignRequest", po_id, "send", json!({})).await, "invalid").contains("Public URL"), "emailed links must be absolute");
+    // The first send created the settings row with the signing key: complete it.
+    let settings = t.list(&globex.admin, "SignSettings", json!({})).await;
+    assert_eq!(settings.len(), 1);
+    let settings_id = uid(&settings[0]);
+    assert_eq!(t.get(&globex.admin, "SignSettings", settings_id).await["signing_key"], json!(true), "the key is a secret: reads only say it is set");
+    t.k.update(&globex.admin, "SignSettings", settings_id, obj(json!({"public_url": "https://erp.globex.test/"})), None).await.unwrap();
+    let sent = t.action(&gina, po_id, "send", json!({})).await;
+    assert_eq!((sent["signers"][0]["emailed"].clone(), sent["signers"][0].get("url").is_none()), (json!(true), true), "emailed, so no link in the answer");
+    let deliver = || async { while t.k.dispatch_outbox_once().await.unwrap_or(0) > 0 {} };
+    deliver().await;
+    let sent_mail = || mail.0.lock().unwrap().clone();
+    let first = sent_mail();
+    assert_eq!(first.len(), 1, "one invitation, with Mail or not");
+    assert_eq!(first[0].0, "sam@supplier.test");
+    assert!(first[0].1.contains("please sign \"Purchase Order\""), "the package's invitation wording: {}", first[0].1);
+    let prefix = "https://erp.globex.test/api/site/globex/sign/s/";
+    // (The template's escaping writes a slash as an entity; a browser reads it back.)
+    let body = first[0].2.replace("&#x2f;", "/");
+    let start = body.find(prefix).unwrap_or_else(|| panic!("an absolute signing link in the email: {body}"));
+    let token: String = body[start + prefix.len()..].chars().take(43).collect();
+    // The link is a secret of its message: the log keeps a placeholder, not the token.
+    let log = t.k.message_log(&gina, Some(("SignRequest", po_id)), None, 20).await.unwrap();
+    assert!(!log.is_empty() && !serde_json::to_string(&log).unwrap().contains(&token), "the message log never holds the signing link");
+
+    // The signing page: the workspace's brand and its own consent sentence (none set: null, the page words it).
+    let brand = uid(&t.k.insert(&globex.admin, "Brand", obj(json!({"brand_name": "Globex Legal", "primary_color": "#aa3300"}))).await.unwrap());
+    let (_, view) = t.view(&globex, &token, None).await.unwrap();
+    assert!(view["consent"].is_null(), "no custom sentence: the page words its own");
+    t.k.update(
+        &globex.admin,
+        "SignSettings",
+        settings_id,
+        obj(json!({"brand": brand.to_string(), "consent_text": "  I accept Globex's purchase terms.  "})),
+        None,
+    )
+    .await
+    .unwrap();
+    let (_, view) = t.view(&globex, &token, None).await.unwrap();
+    assert_eq!(view["brand"]["name"], json!("Globex Legal"), "the signing page carries the settings' brand");
+    assert_eq!(view["consent"], json!("I accept Globex's purchase terms."), "a custom consent is shown, trimmed");
+    let (_, done) = t.sign(&globex, &token, None, json!({"consent": true, "signature": {"image": drawn(500, 150)}})).await.unwrap();
+    assert_eq!(done["request_status"], json!("Completed"));
+    let po = t.get(&gina, "SignRequest", po_id).await;
+    deliver().await;
+    let mails = sent_mail();
+    let copy = mails.iter().find(|m| m.1.starts_with("Signed:")).expect("the signer is sent a copy");
+    assert_eq!(copy.3, vec!["Purchase Order - signed.pdf".to_string()], "the sealed PDF is attached");
+    assert!(copy.2.contains(po["sealed_sha256"].as_str().unwrap()));
+    assert_eq!(
+        t.get(&gina, "SignRequest", po_id).await["sealed_document"].as_str().map(|d| d.len()),
+        po["sealed_document"].as_str().map(|d| d.len()),
+        "sealing is unchanged"
+    );
+
+    // An edit of the reminder template is in the next reminder.
+    let read = t.k.message_template(&globex.admin, "sign.reminder").await.unwrap();
+    let mut def: ferrum_meta::MessageDef = serde_json::from_value(read["template"].clone()).unwrap();
+    def.languages.get_mut("en").unwrap().email.as_mut().unwrap().subject = "Nudge: {{ doc.title }}".into();
+    t.k.save_message_template(&globex.admin, &def).await.unwrap();
+    let second = make("Second Order").await;
+    t.action(&gina, second, "send", json!({})).await;
+    t.action(&gina, second, "remind", json!({})).await;
+    deliver().await;
+    assert!(sent_mail().iter().any(|m| m.1 == "Nudge: Second Order"), "the workspace's wording: {:?}", sent_mail().iter().map(|m| &m.1).collect::<Vec<_>>());
+}
+
+#[test]
+fn choices_numbers_and_attachments_are_filled_in_and_checked() {
+    run(richer_fields());
+}
+
+fn choice(role: &str, kind: &str, label: &str, y: i64, extra: Value) -> Value {
+    let mut f = field(role, kind, label, 1, 72, y, 150, 20);
+    for (k, v) in extra.as_object().unwrap() {
+        f[k] = v.clone();
+    }
+    f
+}
+
+/// S11-G2: Dropdown, Radio, Number and Attachment fields. A draft refuses a field without what it needs; the signer's
+/// answer must be one of the choices, a number within its places and bounds; an upload is checked by its bytes against
+/// the field's kinds, is the signer's own and no one else's, at most three times, and a stranger's link stores nothing.
+async fn richer_fields() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let pdf = contract_pdf("Fields");
+    let png: Vec<u8> = b"\x89PNG\r\n\x1a\n-not really an image-".to_vec();
+    let draft = |fields: Vec<Value>| {
+        json!({"title": "Fields", "signing_mode": "Parallel", "fields": fields,
+            "signers": [{"role": "Client", "name": "Cleo", "email": "cleo@client.test"}, {"role": "Other", "name": "Omar", "email": "omar@client.test"}]})
+    };
+    // The values of a submission, by field id.
+    let values = |pairs: &[(&String, Value)]| Value::Object(pairs.iter().map(|(k, v)| ((*k).clone(), v.clone())).collect());
+    let plan = choice("Client", "Dropdown", "Plan", 500, json!({"options": ["Basic", "Pro"]}));
+    let colour = choice("Client", "Radio", "Colour", 460, json!({"options": ["Red", "Blue"], "option_boxes": [[72, 460, 14, 14], [120, 460, 14, 14]]}));
+    let seats = choice("Client", "Number", "Seats", 420, json!({"min_value": "1", "max_value": "10", "decimals": 0}));
+    let card = choice("Client", "Attachment", "ID card", 380, json!({"accept": "pdf,png"}));
+    let theirs = choice("Other", "Attachment", "Their ID", 340, json!({}));
+    let mark = field("Client", "Signature", "C", 1, 72, 600, 200, 50);
+
+    // A draft refuses a field without what it needs.
+    for (bad, why) in [
+        (choice("Client", "Dropdown", "Plan", 500, json!({})), "choices"),
+        (choice("Client", "Dropdown", "Plan", 500, json!({"options": ["A", "a"]})), "same"),
+        (choice("Client", "Radio", "Colour", 460, json!({"options": ["Red", "Blue"], "option_boxes": [[72, 460, 14, 14]]})), "one box"),
+        (choice("Client", "Radio", "Colour", 460, json!({"options": ["Red"], "option_boxes": [[72, 2000, 14, 14]]})), "inside the page"),
+        (choice("Client", "Number", "Seats", 420, json!({"min_value": "5", "max_value": "2"})), "larger"),
+        (choice("Client", "Number", "Seats", 420, json!({"min_value": "five"})), "not a number"),
+        (choice("Client", "Attachment", "ID", 380, json!({"accept": "pdf,exe"})), "list kinds"),
+    ] {
+        let mut d = draft(vec![bad]);
+        d["document"] = json!(t.upload(&asha, "f.pdf", &pdf).await);
+        let m = refused(t.k.insert(&asha, "SignRequest", obj(d)).await, "invalid");
+        assert!(m.contains(why), "{why}: {m}");
+    }
+    let mut d = draft(vec![plan, colour, seats, card, theirs, mark, field("Other", "Signature", "O", 1, 320, 600, 200, 50)]);
+    d["document"] = json!(t.upload(&asha, "f.pdf", &pdf).await);
+    let id = uid(&t.k.insert(&asha, "SignRequest", obj(d)).await.unwrap());
+    let sent = t.action(&asha, id, "send", json!({})).await;
+    let r = t.get(&asha, "SignRequest", id).await;
+    let link = |role: &str| token_of(sent["signers"].as_array().unwrap().iter().find(|l| l["role"] == json!(role)).unwrap()["url"].as_str().unwrap());
+    let (mine, other) = (&link("Client"), &link("Other"));
+    let (plan_id, colour_id, seats_id, card_id, theirs_id) =
+        (field_id(&r, "Plan"), field_id(&r, "Colour"), field_id(&r, "Seats"), field_id(&r, "ID card"), field_id(&r, "Their ID"));
+
+    // What the page is told of each field.
+    let (_, view) = t.view(&acme, mine, None).await.unwrap();
+    let f = |label: &str| view["fields"].as_array().unwrap().iter().find(|f| f["label"] == json!(label)).unwrap().clone();
+    assert_eq!(f("Plan")["options"], json!(["Basic", "Pro"]));
+    assert_eq!(f("Colour")["option_boxes"].as_array().unwrap().len(), 2);
+    assert_eq!((f("Seats")["max_value"].clone(), f("Seats")["decimals"].clone()), (json!("10"), json!(0)));
+    assert_eq!((f("ID card")["accept"].clone(), f("ID card")["uploaded"].clone()), (json!(["pdf", "png"]), Value::Null));
+    assert!(view["fields"].as_array().unwrap().iter().all(|f| f["label"] != json!("Their ID")), "another role's field is not shown");
+
+    // Answers: each wrong one is refused with its reason, nothing is signed.
+    let ink = json!({"text": "Cleo Client"});
+    let answer = |values: Value| json!({"consent": true, "signature": ink, "values": values});
+    let tries = [
+        (json!({}), "choose one"),
+        (values(&[(&plan_id, json!("Gold")), (&colour_id, json!("Red")), (&seats_id, json!("5"))]), "not one of the choices"),
+        (values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("11"))]), "at most 10"),
+        (values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("2.5"))]), "whole number"),
+        (values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("many"))]), "must be a number"),
+        (values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("5"))]), "upload a file"),
+    ];
+    for (values, why) in tries {
+        let m = refused(t.sign(&acme, mine, None, answer(values)).await, "invalid");
+        assert!(m.contains(why), "{why}: {m}");
+    }
+
+    // Uploads: the bytes decide, not the name; the field's kinds; the signer's own; three at most; a stranger stores nothing.
+    let upload = |token: &str, field: &str, name: &'static str, bytes: Vec<u8>| {
+        let (t, acme) = (&t, &acme);
+        let (token, field) = (token.to_string(), field.to_string());
+        async move { t.site_with(acme, "POST", &format!("/signing/{token}/attachments/{field}"), &[("x-file-name", name)], bytes).await }
+    };
+    let files = || t.scalar0::<i64>(&acme, "select count(*) from file_object");
+    let before = files().await;
+    refused(upload(mine, &card_id, "id.pdf", b"MZ\x90\x00 an executable named .pdf".to_vec()).await, "invalid");
+    refused(upload(mine, &card_id, "id.jpg", b"\xFF\xD8\xFF\xE0 a jpeg the field does not take".to_vec()).await, "invalid");
+    refused(upload(&"A".repeat(43), &card_id, "id.png", png.clone()).await, "not found");
+    refused(upload(mine, &plan_id, "id.png", png.clone()).await, "not found");
+    assert_eq!(files().await, before, "a refused upload leaves no file behind");
+    let ok = upload(mine, &card_id, "../my id.png", png.clone()).await.unwrap();
+    assert_eq!(ok.status, 200);
+    let first: Value = serde_json::from_slice(&ok.body).unwrap();
+    assert!(!first["name"].as_str().unwrap().contains('/'), "path characters are not kept: {first}");
+    // Another signer's upload is theirs: this signer cannot sign with it.
+    let ok = upload(other, &theirs_id, "theirs.png", png.clone()).await.unwrap();
+    let theirs_file: Value = serde_json::from_slice(&ok.body).unwrap();
+    let m = refused(
+        t.sign(
+            &acme,
+            mine,
+            None,
+            answer(values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Red")), (&seats_id, json!("5")), (&card_id, theirs_file["file"].clone())])),
+        )
+        .await,
+        "invalid",
+    );
+    assert!(m.contains("not the file you uploaded"), "{m}");
+    // Replacing it twice more is allowed; a fourth upload is not; the replaced files are gone.
+    upload(mine, &card_id, "second.png", png.clone()).await.unwrap();
+    let third = upload(mine, &card_id, "third.png", png.clone()).await.unwrap();
+    let third: Value = serde_json::from_slice(&third.body).unwrap();
+    let m = refused(upload(mine, &card_id, "fourth.png", png.clone()).await, "invalid");
+    assert!(m.contains("too many"), "{m}");
+    assert_eq!(files().await, before + 2, "one file per field is kept: the signer's last and the other signer's");
+    assert_eq!(t.count(&acme, id, "Attachment Added").await, 4);
+
+    // Signing with the right answers completes the request; the values are kept as given.
+    let (status, done) = t
+        .sign(
+            &acme,
+            mine,
+            None,
+            answer(values(&[(&plan_id, json!("Pro")), (&colour_id, json!("Blue")), (&seats_id, json!("07")), (&card_id, third["file"].clone())])),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status, 200, "{done}");
+    let r = t.get(&asha, "SignRequest", id).await;
+    let value = |label: &str| r["fields"].as_array().unwrap().iter().find(|f| f["label"] == json!(label)).unwrap()["value"].clone();
+    assert_eq!((value("Plan"), value("Colour"), value("Seats")), (json!("Pro"), json!("Blue"), json!("7")), "a number is kept without leading zeros");
+    assert_eq!(value("ID card"), third["file"]);
+    let (status, _) = t
+        .sign(&acme, other, None, json!({"consent": true, "signature": {"text": "Omar Other"}, "values": values(&[(&theirs_id, theirs_file["file"].clone())])}))
+        .await
+        .unwrap();
+    assert_eq!(status, 200);
+    let r = t.get(&asha, "SignRequest", id).await;
+    assert_eq!(r["status"], json!("Completed"), "{}", r["seal_error"]);
+}
+
+#[test]
+fn several_documents_are_signed_and_sealed_in_one_request() {
+    run(several_documents());
+}
+
+/// S11-G3: one request, three documents. A box names the document it is on; the signer reads each one; sealing stamps each
+/// with its own values (one certificate, on the main document, listing all three hashes); every document is checked by
+/// `verify` and by the public check, and the original of none can be changed after sending.
+async fn several_documents() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let sys = t.sys(&acme);
+    let (one, two, three) = (contract_pdf("One"), contract_pdf("Two"), contract_pdf("Three"));
+    let on = |n: i64, mut f: Value| {
+        f["document_no"] = json!(n);
+        f
+    };
+    let (tr, ar, o, tw, th) = (&t, &asha, &one, &two, &three);
+    let draft = move |fields: Vec<Value>| async move {
+        json!({"title": "Three documents", "document": tr.upload(ar, "one.pdf", o).await,
+            "more_documents": [{"document": tr.upload(ar, "two.pdf", tw).await}, {"document": tr.upload(ar, "three.pdf", th).await}],
+            "signers": [{"role": "Client", "name": "Cleo", "email": "cleo@client.test"}], "fields": fields})
+    };
+    // A box on a document the request does not have is refused.
+    let m = refused(t.k.insert(&asha, "SignRequest", obj(draft(vec![on(4, field("Client", "Signature", "S", 1, 72, 600, 200, 50))]).await)).await, "invalid");
+    assert!(m.contains("3 documents"), "{m}");
+    let fields = vec![
+        field("Client", "Signature", "S1", 1, 72, 600, 200, 50),
+        on(2, field("Client", "Text", "Note", 1, 72, 500, 200, 22)),
+        on(3, field("Client", "Initials", "Ini", 2, 100, 100, 56, 32)),
+    ];
+    let id = uid(&t.k.insert(&asha, "SignRequest", obj(draft(fields).await)).await.unwrap());
+    let sent = t.action(&asha, id, "send", json!({})).await;
+    let token = token_of(sent["signers"][0]["url"].as_str().unwrap());
+    let r = t.get(&asha, "SignRequest", id).await;
+    assert_eq!(r["more_documents"].as_array().unwrap().len(), 2);
+    assert!(r["more_documents"][0]["document_sha256"].is_string() && r["more_documents"][1]["page_count"] == json!(2), "each document is measured");
+
+    // The signer is shown three documents and reads each.
+    let (_, view) = t.view(&acme, &token, None).await.unwrap();
+    assert_eq!(view["request"]["documents"].as_array().unwrap().len(), 3);
+    let on_docs: Vec<i64> = view["fields"].as_array().unwrap().iter().map(|f| f["document_no"].as_i64().unwrap()).collect();
+    assert_eq!(on_docs, vec![1, 2, 3], "each box says which document it is on");
+    for (n, bytes) in [(1, &one), (2, &two), (3, &three)] {
+        let got = t.site(&acme, "GET", &format!("/signing/{token}/document?n={n}"), None, vec![]).await.unwrap();
+        assert_eq!(sha(&got.body), sha(bytes), "document {n} is the one sent");
+    }
+    refused(t.site(&acme, "GET", &format!("/signing/{token}/document?n=4"), None, vec![]).await, "not found");
+
+    let note = field_id(&r, "Note");
+    let (status, done) =
+        t.sign(&acme, &token, None, json!({"consent": true, "signature": {"text": "Cleo Client"}, "values": {note.clone(): "Seen"}})).await.unwrap();
+    assert_eq!((status, done["request_status"].clone()), (200, json!("Completed")), "{done}");
+    let r = t.get(&asha, "SignRequest", id).await;
+    let sealed: Vec<(String, String)> = std::iter::once(&r)
+        .chain(r["more_documents"].as_array().unwrap().iter().map(|d| d.as_object().unwrap()).collect::<Vec<_>>())
+        .map(|d| (d["sealed_document"].as_str().unwrap().to_string(), d["sealed_sha256"].as_str().unwrap().to_string()))
+        .collect();
+    assert_eq!(sealed.iter().map(|x| &x.1).collect::<std::collections::HashSet<_>>().len(), 3, "three different sealed files");
+    assert_eq!(t.count(&acme, id, "Completed").await, 1);
+    let payload: Value = t.scalar(&acme, "select payload from outbox where tenant_id = $1 and topic = 'sign.request_completed' and record_id = $2", id).await;
+    assert_eq!(payload["documents"].as_array().unwrap().len(), 3, "the outbox names every sealed document");
+
+    // Checked: the request's own verify, and a presented second document.
+    let verdict = t.action(&asha, id, "verify", json!({})).await;
+    assert_eq!(verdict["valid"], json!(true), "{verdict}");
+    assert_eq!(verdict["documents"].as_array().unwrap().len(), 2);
+    let file_of = |p: &str| -> Uuid { p[7..].parse().unwrap() };
+    let second = t.k.read_file(&sys, file_of(&sealed[1].0)).await.unwrap().2;
+    let presented = t.verify_pdf(&acme, second.clone()).await;
+    assert_eq!((presented["valid"].clone(), presented["request"]["number"].clone()), (json!(true), r["number"].clone()), "{presented}");
+    // One changed byte in the third sealed file: the request no longer verifies, and says which.
+    let third = file_of(&sealed[2].0);
+    let kept = t.store.tamper(third);
+    let verdict = t.action(&asha, id, "verify", json!({})).await;
+    assert_eq!(verdict["valid"], json!(false));
+    assert_eq!(verdict["documents"][1]["sealed"]["ok"], json!(false), "document 3 is the one named");
+    assert_eq!(verdict["documents"][0]["sealed"]["ok"], json!(true));
+    t.store.restore(third, kept);
+    assert_eq!(t.action(&asha, id, "verify", json!({})).await["valid"], json!(true));
+}
+
+#[test]
+fn the_signing_page_may_be_framed_only_where_the_manager_allowed() {
+    run(embedding());
+}
+
+/// S4-S1: `allow_embedding` writes the workspace's Embedding for `sign/s` (once, replaced by the next call); the platform
+/// then frames the page for those sites only. An origin that is a path or plain http, or no site at all, is refused; a
+/// Sign User cannot.
+async fn embedding() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let settings = uid(&t.k.insert(&mira, "SignSettings", obj(json!({"sender_name": "Acme Corp"}))).await.unwrap());
+    let allow = |who: &Ctx, origins: &str| {
+        let (k, who, origins) = (t.k.clone(), who.clone(), origins.to_string());
+        async move { k.run_action(&who, "SignSettings", settings, "allow_embedding", json!({"origins": origins})).await }
+    };
+    assert!(t.k.embedders(acme.id, "sign/s").await.unwrap().is_empty(), "nowhere before");
+    let done = allow(&mira, "https://www.example.com\nhttps://shop.example.org").await.unwrap();
+    assert_eq!(done["page"], json!("sign/s"));
+    assert_eq!(t.k.embedders(acme.id, "sign/s").await.unwrap(), vec!["https://www.example.com".to_string(), "https://shop.example.org".to_string()]);
+    allow(&mira, "https://only.example.net").await.unwrap();
+    assert_eq!(t.k.embedders(acme.id, "sign/s").await.unwrap(), vec!["https://only.example.net".to_string()], "replaced, not added to");
+    assert_eq!(t.scalar0::<i64>(&acme, "select count(*) from e_embedding where page = 'sign/s'").await, 1, "one record, however often it is set");
+    for bad in ["https://www.example.com/path", "http://evil.test", "   ", "not a site"] {
+        refused(allow(&mira, bad).await, "invalid");
+    }
+    assert_eq!(t.k.embedders(acme.id, "sign/s").await.unwrap(), vec!["https://only.example.net".to_string()], "a refused call changes nothing");
+    refused(allow(&asha, "https://www.example.com").await, "forbidden");
+}
+
+#[test]
+fn a_bulk_send_makes_one_request_per_recipient() {
+    run(bulk());
+}
+
+/// S11-G7: a bulk send is checked whole at `start`, then sent by upkeep a row at a time, each row once however many
+/// upkeeps run together (the bulk's and the row's locks, the request and the row's mark in one transaction); a row that
+/// fails is recorded and the others go on; the daily limit pauses sending; people are forgotten once their request is made
+/// (and a failed row's after a month); cancelling forgets the rest.
+async fn bulk() {
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let ravi = t.user(&acme, "ravi@acme.test", "Ravi Kumar", &["Sign User"]).await;
+    let pdf = contract_pdf("Bulk");
+    let template = {
+        let draft = json!({"template_name": "Welcome", "title": "Welcome pack", "document": t.upload(&mira, "w.pdf", &pdf).await,
+            "roles": [{"role": "Client", "signing_order": 1}], "fields": [field("Client", "Signature", "S", 1, 72, 600, 200, 50)]});
+        uid(&t.k.insert(&mira, "SignTemplate", obj(draft)).await.unwrap())
+    };
+    let table = ferrum_kernel::ddl::q(&acme.admin.schema.entity("SignBulkSend").unwrap().children["recipients"].table);
+    let person = |i: usize| json!({"Client": {"name": format!("Person {i}"), "email": format!("p{i}@client.test")}}).to_string();
+    let bulk_of = |who: &Ctx, rows: Vec<String>| {
+        let (k, who) = (t.k.clone(), who.clone());
+        async move {
+            let recipients: Vec<Value> = rows.into_iter().map(|s| json!({"signers": s})).collect();
+            uid(&k.insert(&who, "SignBulkSend", obj(json!({"title": "Welcome", "template": template.to_string(), "recipients": recipients}))).await.unwrap())
+        }
+    };
+    let start = |who: &Ctx, id: Uuid| {
+        let (k, who) = (t.k.clone(), who.clone());
+        async move { k.run_action(&who, "SignBulkSend", id, "start", json!({})).await }
+    };
+    let made = |bulk: Uuid| t.scalar::<i64>(&acme, "select count(*) from e_sign_request where tenant_id = $1 and bulk_send = $2", bulk);
+
+    // Checked whole at start: a role the template lacks, an address that is no address; nothing starts.
+    let wrong = bulk_of(&asha, vec![person(1), json!({"Boss": {"name": "B", "email": "b@x.test"}}).to_string()]).await;
+    assert!(refused(start(&asha, wrong).await, "invalid").contains("no role"));
+    let wrong_mail = bulk_of(&asha, vec![json!({"Client": {"name": "B", "email": "not-an-address"}}).to_string()]).await;
+    assert!(refused(start(&asha, wrong_mail).await, "invalid").contains("email address"));
+    assert_eq!(t.get(&asha, "SignBulkSend", wrong).await["status"], json!("Draft"));
+
+    // Five recipients; one row is spoiled after it was checked, as a failure at sending would be.
+    let id = bulk_of(&asha, (1..=5).map(person).collect()).await;
+    assert!(start(&ravi, id).await.is_err(), "another Sign User cannot start it");
+    assert!(t.list(&ravi, "SignBulkSend", json!({})).await.is_empty(), "a Sign User sees only their own bulk sends");
+    let started = start(&asha, id).await.unwrap();
+    assert_eq!((started["status"].clone(), started["rows"].clone()), (json!("Sending"), json!(5)));
+    t.sql(&acme, &format!("update {table} set signers = 'not json' where tenant_id = $1 and parent_id = $2 and row_no = 3"), id).await.unwrap();
+
+    // Two upkeeps at the same moment: each row is made once.
+    let (a, b) = tokio::join!(ferrum_app_sign::maintenance(&t.k, acme.id), ferrum_app_sign::maintenance(&t.k, acme.id));
+    a.expect("upkeep");
+    b.expect("upkeep");
+    assert_eq!(made(id).await, 4, "four requests, one per recipient that could be made");
+    let b = t.get(&asha, "SignBulkSend", id).await;
+    assert_eq!((b["status"].clone(), b["sent"].clone(), b["failed"].clone()), (json!("Done With Failures"), json!(4), json!(1)));
+    let rows = b["recipients"].as_array().unwrap();
+    assert_eq!(rows.iter().map(|r| r["status"].as_str().unwrap()).collect::<Vec<_>>(), vec!["Sent", "Sent", "Failed", "Sent", "Sent"]);
+    assert!(rows[2]["error"].as_str().unwrap().contains("JSON"), "the reason is kept: {}", rows[2]["error"]);
+    assert!(rows.iter().filter(|r| r["status"] == json!("Sent")).all(|r| r["signers"].is_null() && r["request"].is_string()), "sent rows forget their people");
+    assert!(rows[2]["signers"].is_string(), "a failed row keeps its people to be fixed");
+    let first = t.get(&asha, "SignRequest", rows[0]["request"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!((first["sender_email"].clone(), first["status"].clone(), first["title"].clone()), (json!("asha@acme.test"), json!("Sent"), json!("Welcome")));
+    // A failed row's people are forgotten a month after the bulk send last changed.
+    t.sql(&acme, "update e_sign_bulk_send set updated_at = now() - interval '31 days' where tenant_id = $1 and id = $2", id).await.unwrap();
+    t.maintenance(&acme).await;
+    assert!(t.get(&asha, "SignBulkSend", id).await["recipients"][2]["signers"].is_null());
+
+    // The daily limit pauses sending, and room made later lets it go on.
+    // (Sending made the settings row with the signing key: its limit is what is changed.)
+    let settings = uid(&t.list(&mira, "SignSettings", json!({})).await[0]);
+    t.k.update(&mira, "SignSettings", settings, obj(json!({"bulk_per_day": 2})), None).await.unwrap();
+    let capped = bulk_of(&asha, (6..=9).map(person).collect()).await;
+    start(&asha, capped).await.unwrap();
+    t.maintenance(&acme).await;
+    assert_eq!(
+        (made(capped).await, t.get(&asha, "SignBulkSend", capped).await["status"].clone()),
+        (0, json!("Sending")),
+        "four were made today: the limit of 2 is reached"
+    );
+    t.k.update(&mira, "SignSettings", settings, obj(json!({"bulk_per_day": 6})), None).await.unwrap();
+    t.maintenance(&acme).await;
+    assert_eq!(made(capped).await, 2, "room for two more");
+    t.k.update(&mira, "SignSettings", settings, obj(json!({"bulk_per_day": 100})), None).await.unwrap();
+    t.maintenance(&acme).await;
+    assert_eq!((made(capped).await, t.get(&asha, "SignBulkSend", capped).await["status"].clone()), (4, json!("Done")));
+
+    // Stopping forgets the rows not yet sent and sends no more.
+    let stopped = bulk_of(&asha, (10..=12).map(person).collect()).await;
+    start(&asha, stopped).await.unwrap();
+    t.k.run_action(&asha, "SignBulkSend", stopped, "stop", json!({})).await.unwrap();
+    t.maintenance(&acme).await;
+    let b = t.get(&asha, "SignBulkSend", stopped).await;
+    assert_eq!((b["status"].clone(), made(stopped).await), (json!("Cancelled"), 0));
+    assert!(b["recipients"].as_array().unwrap().iter().all(|r| r["signers"].is_null() && r["status"] == json!("Waiting")));
+}
+
+#[test]
+fn a_finished_document_carries_the_workspaces_digital_seal() {
+    run(digital_seal());
+}
+
+/// S11-G5: every finished document is signed digitally by the workspace's key (one key per workspace, made once however
+/// many seals start at the same moment); the request's verify and the public check find the seal valid, name who it says it
+/// is, and find it broken by one changed byte; the audit trail travels inside the file; a seal key that does not match its
+/// certificate, or is an RSA key, is refused when saved; choosing no seal gives a file without one.
+async fn digital_seal() {
+    use p256::pkcs8::{EncodePrivateKey, LineEnding};
+    let t = boot(KernelSettings::default()).await;
+    let acme = t.tenant("acme", &["sign"], "UTC").await;
+    let asha = t.user(&acme, "asha@acme.test", "Asha Rao", &["Sign User"]).await;
+    let mira = t.user(&acme, "mira@acme.test", "Mira Chen", &["Sign Manager"]).await;
+    let sys = t.sys(&acme);
+    let pdf = contract_pdf("Sealed");
+
+    // One key, made once: two first seals at the same moment get the same certificate.
+    let (a, b) = tokio::join!(ferrum_app_sign::workspace_seal(&t.k, acme.id), ferrum_app_sign::workspace_seal(&t.k, acme.id));
+    let (a, b) = (a.unwrap().expect("a seal"), b.unwrap().expect("a seal"));
+    assert_eq!(a, b, "one key serves both");
+    assert_eq!(ferrum_app_sign::workspace_seal(&t.k, acme.id).await.unwrap(), Some(a.clone()), "and the next call");
+
+    let (id, token) = t.one_signer_request(&asha, "Sealed", &pdf).await;
+    let (status, done) = t.sign(&acme, &token, None, json!({"consent": true, "signature": {"text": "Cleo Client"}})).await.unwrap();
+    assert_eq!((status, done["request_status"].clone()), (200, json!("Completed")), "{done}");
+    let r = t.get(&asha, "SignRequest", id).await;
+    let file: Uuid = r["sealed_document"].as_str().unwrap()[7..].parse().unwrap();
+    let bytes = t.k.read_file(&sys, file).await.unwrap().2;
+    let verdict = t.action(&asha, id, "verify", json!({})).await;
+    assert_eq!(verdict["valid"], json!(true), "{verdict}");
+    assert_eq!(verdict["seal"]["valid"], json!(true), "{verdict}");
+    assert_eq!(verdict["seal"]["certificate_sha256"], json!(a), "the file was sealed with the workspace's key");
+    assert!(verdict["seal"]["subject"].as_str().unwrap().contains("Sign seal"));
+    let presented = t.verify_pdf(&acme, bytes.clone()).await;
+    assert_eq!((presented["valid"].clone(), presented["seal"]["valid"].clone()), (json!(true), json!(true)), "{presented}");
+
+    // The audit trail travels inside the file, as the chain has it.
+    let doc = lopdf::Document::load_mem(&bytes).expect("the sealed file reads");
+    let names = doc
+        .catalog()
+        .unwrap()
+        .get(b"Names")
+        .and_then(|n| doc.dereference(n))
+        .unwrap()
+        .1
+        .as_dict()
+        .unwrap()
+        .get(b"EmbeddedFiles")
+        .and_then(|n| doc.dereference(n))
+        .unwrap()
+        .1
+        .as_dict()
+        .unwrap()
+        .get(b"Names")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    let spec = doc
+        .dereference(&names[1])
+        .unwrap()
+        .1
+        .as_dict()
+        .unwrap()
+        .get(b"EF")
+        .and_then(|e| doc.dereference(e))
+        .unwrap()
+        .1
+        .as_dict()
+        .unwrap()
+        .get(b"F")
+        .and_then(|f| doc.dereference(f))
+        .unwrap()
+        .1
+        .as_stream()
+        .unwrap()
+        .clone();
+    let embedded: Value = serde_json::from_slice(&spec.content).expect("the trail is JSON");
+    let events = embedded["events"].as_array().unwrap();
+    let kept: Vec<String> = {
+        let mut tx = t.k.db.tenant_tx(acme.id).await.unwrap();
+        let rows = sqlx::query_scalar("select event_hash from e_sign_event where tenant_id = $1 and request = $2 order by seq")
+            .bind(acme.id)
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        rows
+    };
+    assert_eq!(
+        events.iter().map(|e| e["event_hash"].as_str().unwrap().to_string()).collect::<Vec<_>>(),
+        kept[..kept.len() - 1].to_vec(),
+        "every event up to the completion, as chained"
+    );
+
+    // One changed byte: the request no longer verifies, the file presented is refused.
+    let mut changed = bytes.clone();
+    let at = changed.len() / 3;
+    changed[at] ^= 0x01;
+    assert_eq!(t.verify_pdf(&acme, changed).await["valid"], json!(false));
+    let kept_bytes = t.store.tamper(file);
+    let verdict = t.action(&asha, id, "verify", json!({})).await;
+    assert_eq!((verdict["valid"].clone(), verdict["seal"]["valid"].clone()), (json!(false), json!(false)), "{verdict}");
+    t.store.restore(file, kept_bytes);
+
+    // A key set in Sign Settings: it must be one of the two curves and match its certificate; nothing changes when refused.
+    let settings = uid(&t.list(&mira, "SignSettings", json!({})).await[0]);
+    let certificate = t.get(&mira, "SignSettings", settings).await["seal_certificate"].as_str().unwrap().to_string();
+    let foreign = p256::SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng).to_pkcs8_pem(LineEnding::LF).unwrap().to_string();
+    let set = |params: Value| {
+        let (k, who) = (t.k.clone(), mira.clone());
+        async move { k.run_action(&who, "SignSettings", settings, "set_seal", params).await }
+    };
+    let m = refused(set(json!({"seal_key": foreign, "seal_certificate": certificate})).await, "invalid");
+    assert!(m.contains("not for the seal key"), "{m}");
+    let rsa = "-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAu7vjTXgGDKrVZyeX\n-----END PRIVATE KEY-----\n";
+    let m = refused(set(json!({"seal_key": rsa, "seal_certificate": certificate})).await, "invalid");
+    assert!(m.contains("RSA keys are not accepted"), "{m}");
+    refused(set(json!({"seal_key": foreign})).await, "invalid");
+    refused(t.k.run_action(&asha, "SignSettings", settings, "set_seal", json!({"seal_key": foreign, "seal_certificate": certificate})).await, "forbidden");
+    assert_eq!(ferrum_app_sign::workspace_seal(&t.k, acme.id).await.unwrap(), Some(a), "the seal is as it was");
+
+    // No seal chosen: the file is as it was before, signed by nobody.
+    t.k.update(&mira, "SignSettings", settings, obj(json!({"seal": "None"})), None).await.unwrap();
+    assert_eq!(ferrum_app_sign::workspace_seal(&t.k, acme.id).await.unwrap(), None);
+    let (plain, token) = t.one_signer_request(&asha, "Not sealed", &pdf).await;
+    t.sign(&acme, &token, None, json!({"consent": true, "signature": {"text": "Cleo Client"}})).await.unwrap();
+    let verdict = t.action(&asha, plain, "verify", json!({})).await;
+    assert_eq!((verdict["valid"].clone(), verdict["seal"].clone()), (json!(true), Value::Null), "{verdict}");
 }

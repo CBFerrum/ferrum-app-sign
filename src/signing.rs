@@ -22,13 +22,13 @@ pub const LOCKOUT_MINUTES: i64 = 15;
 pub const MAX_SIGN_BODY: usize = 1024 * 1024;
 const MAX_TEXT: usize = 500;
 
-pub const CONSENT: &str = "I agree to sign this document electronically and that my electronic signature is as valid as my handwritten one.";
-
-/// Who is calling: the address (hashed before it is kept), the browser and the access code.
+/// Who is calling: the address (hashed before it is kept), the browser, the access code, and the session a signer
+/// whose link is not mailed opens their page with (`token::session_token`).
 pub struct Client {
     pub ip: String,
     pub user_agent: Option<String>,
     pub access_code: Option<String>,
+    pub session: Option<String>,
 }
 
 pub enum Reply {
@@ -81,20 +81,25 @@ impl Opened {
     }
 }
 
-async fn open(k: &Kernel, sys: &Ctx, tx: &mut Tx, token_str: &str) -> Result<Opened> {
+async fn open(k: &Kernel, sys: &Ctx, tx: &mut Tx, token_str: &str, c: &Client) -> Result<Opened> {
     let (signer_id, tag) = token::parse(token_str).ok_or_else(not_found)?;
     let table = child_table(sys, "SignRequest", "signers")?;
-    let row: Option<(Uuid, Option<String>)> =
-        sqlx::query_as(sqlx::AssertSqlSafe(format!("select parent_id, email from {table} where tenant_id = $1 and id = $2")))
+    let row: Option<(Uuid, Option<String>, Option<String>)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("select parent_id, email, delivery from {table} where tenant_id = $1 and id = $2")))
             .bind(sys.tenant)
             .bind(signer_id)
             .fetch_optional(&mut **tx)
             .await?;
-    let (parent, email) = row.ok_or_else(not_found)?;
+    let (parent, email, delivery) = row.ok_or_else(not_found)?;
     let key = token::signing_key(k, tx, sys.tenant).await?;
     // The tag is checked before anything is locked: forged tokens cost a lookup, nothing more.
     let email = email.unwrap_or_default();
     if !token::link_valid(&key, sys.tenant, parent, signer_id, &email, &tag) {
+        return Err(not_found());
+    }
+    // A signer whose link is not mailed opens their page only with a session the requesting app was given minutes ago.
+    let linked = delivery.as_deref().is_some_and(|d| d != "Email");
+    if linked && !c.session.as_deref().is_some_and(|t| token::session_valid(&key, sys.tenant, signer_id, &email, t, now().timestamp())) {
         return Err(not_found());
     }
     let request = crate::lock_request(k, sys, tx, parent).await.map_err(|e| match e {
@@ -164,14 +169,37 @@ async fn access(k: &Kernel, sys: &Ctx, tx: &mut Tx, o: &Opened, c: &Client) -> R
     }))
 }
 
-/// First access through a link: the signer has viewed the request.
+/// The most devices kept per signer.
+const DEVICES: usize = 20;
+
+/// First access through a link: the signer has viewed the request. A device not seen before (a keyed hash of its
+/// address and browser) is kept, and after the first it is in the trail: a forwarded link shows.
 async fn mark_viewed(k: &Kernel, sys: &Ctx, tx: &mut Tx, o: &Opened, c: &Client) -> Result<()> {
-    if o.signer.get("viewed_at").is_some_and(|v| !v.is_null()) {
+    let device = token::ip_hash(&o.key, &format!("{}|{}", c.ip, c.user_agent.as_deref().unwrap_or_default()));
+    let mut devices: Vec<String> =
+        o.signer.get("devices").and_then(Value::as_array).map(|a| a.iter().filter_map(|d| d.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let first = o.signer.get("viewed_at").is_none_or(Value::is_null);
+    let new_device = !devices.contains(&device);
+    if !first && !new_device {
         return Ok(());
     }
-    set_signer(k, sys, tx, doc_id(&o.signer)?, json!({"status": "Viewed", "viewed_at": ts(now())})).await?;
-    let actor = s(&o.signer, "email").unwrap_or_default().to_string();
-    event::record(k, sys, tx, &o.request, Entry::new("Viewed", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref())).await?;
+    let another = new_device && !devices.is_empty();
+    if new_device {
+        devices.push(device);
+        let extra = devices.len().saturating_sub(DEVICES);
+        devices.drain(..extra);
+    }
+    let mut patch = json!({"devices": devices});
+    if first {
+        patch["status"] = json!("Viewed");
+        patch["viewed_at"] = json!(ts(now()));
+    }
+    set_signer(k, sys, tx, doc_id(&o.signer)?, patch).await?;
+    if first || another {
+        let actor = s(&o.signer, "email").unwrap_or_default().to_string();
+        let entry = Entry::new("Viewed", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref());
+        event::record(k, sys, tx, &o.request, if first { entry } else { entry.details("another device") }).await?;
+    }
     Ok(())
 }
 
@@ -200,7 +228,7 @@ where
     let sys = system(k, tenant).await?;
     with_retry(|| async {
         let mut tx = k.db.tenant_tx(tenant).await?;
-        let o = open(k, &sys, &mut tx, token_str).await?;
+        let o = open(k, &sys, &mut tx, token_str, c).await?;
         if let Some(message) = gate(&o)? {
             tx.rollback().await?;
             return Ok(Gate::Gone(message, o.state()));
@@ -215,11 +243,32 @@ where
     .await
 }
 
-fn field_view(f: &Doc) -> Value {
-    json!({
+fn field_view(f: &Doc, signer: &Doc) -> Value {
+    let mut v = json!({
         "id": s(f, "id"), "field_type": s(f, "field_type"), "label": s(f, "label"), "page": int(f, "page"),
         "x": coord(f, "x"), "y": coord(f, "y"), "width": coord(f, "width"), "height": coord(f, "height"), "required": crate::b(f, "required"),
-    })
+        "document_no": document::document_no(f),
+    });
+    match s(f, "field_type") {
+        Some("Dropdown") => v["options"] = json!(document::choices(f)),
+        Some("Radio") => {
+            v["options"] = json!(document::choices(f));
+            v["option_boxes"] = json!(document::option_boxes(f));
+        }
+        Some("Number") => {
+            v["min_value"] = json!(s(f, "min_value"));
+            v["max_value"] = json!(s(f, "max_value"));
+            v["decimals"] = json!(int(f, "decimals"));
+        }
+        Some("Attachment") => {
+            v["accept"] = json!(document::accepted(f));
+            // What the signer already uploaded for it: its name and size, never another signer's.
+            let up = signer.get("attachments").and_then(|a| a.get(s(f, "id").unwrap_or_default()));
+            v["uploaded"] = json!(up.map(|u| json!({"name": u.get("name"), "size": u.get("size"), "file": u.get("file")})));
+        }
+        _ => {}
+    }
+    v
 }
 
 /// `GET /signing/{token}`: the request as this signer may see it.
@@ -227,38 +276,47 @@ pub async fn view(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Resu
     let gate = with_link(k, tenant, token_str, c, |o, mut tx, sys| async move {
         let settings = crate::settings::load(k, &sys, &mut tx).await?;
         let sender = notice::sender_of(&mut tx, tenant, &o.request).await?;
+        let slug = crate::settings::slug(&mut tx, tenant).await?;
         tx.commit().await?;
+        let brand = k.public_brand(tenant, settings.brand, None).await?.map(|b| b.boot(&slug));
         let r = &o.request;
         let mine = o.my_fields();
         let needs = |t: &str| mine.iter().any(|f| s(f, "field_type") == Some(t));
-        let pages: Vec<Value> =
-            document::page_sizes(r).unwrap_or_default().iter().enumerate().map(|(i, p)| json!({"page": i + 1, "width": p.width, "height": p.height})).collect();
+        let pages_of =
+            |ps: &[pdf::PageSize]| -> Vec<Value> { ps.iter().enumerate().map(|(i, p)| json!({"page": i + 1, "width": p.width, "height": p.height})).collect() };
+        let pages: Vec<Value> = pages_of(&document::page_sizes(r).unwrap_or_default());
+        // Every document of the request: the main one first (`pages` above stays its pages, for pages that know of one).
+        let documents: Vec<Value> =
+            document::documents(r).iter().map(|d| json!({"n": d.n, "name": d.name, "sha256": d.sha256, "pages": pages_of(&d.pages)})).collect();
         Ok(json!({
             "request": {
                 "number": s(r, "number"), "title": s(r, "title"), "message": s(r, "message"), "status": s(r, "status"),
                 "signing_mode": s(r, "signing_mode"), "expires_at": s(r, "expires_at"), "document_name": s(r, "document_name"),
-                "document_sha256": s(r, "document_sha256"), "pages": pages,
+                "document_sha256": s(r, "document_sha256"), "pages": pages, "documents": documents,
                 "sender": {"organization": settings.sender_name, "name": sender.as_ref().map(|x| &x.0), "email": sender.as_ref().map(|x| &x.1)},
             },
             "signer": {"role": s(&o.signer, "role"), "name": s(&o.signer, "name"), "email": s(&o.signer, "email"), "status": "Viewed"},
-            "fields": mine.iter().map(field_view).collect::<Vec<_>>(),
+            "fields": mine.iter().map(|f| field_view(f, &o.signer)).collect::<Vec<_>>(),
             "needs": {"signature": needs("Signature"), "initials": needs("Initials")},
             "identity": {"code": request::code_channel(r, &o.signer), "verified": o.signer.get("identity_verified_at").is_some_and(|v| !v.is_null())},
             "can_reassign": crate::b(r, "allow_reassign"),
-            "consent": CONSENT,
+            // The workspace's own words, or null: the page shows Sign's sentence in the signer's language.
+            "consent": settings.consent_text,
+            "brand": brand,
         }))
     })
     .await?;
     Ok(gate.reply())
 }
 
-/// `GET /signing/{token}/document`: the original PDF `(file name, bytes)`, after checking it
+/// `GET /signing/{token}/document?n=`: the original PDF `(file name, bytes)`, after checking it
 /// still matches its hash.
-pub async fn document(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client) -> Result<Gate<(String, Vec<u8>)>> {
+pub async fn document(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, n: usize) -> Result<Gate<(String, Vec<u8>)>> {
     let gate = with_link(k, tenant, token_str, c, |o, tx, _sys| async move {
         tx.commit().await?;
-        let file = s(&o.request, "document").and_then(document::file_id).ok_or_else(not_found)?;
-        Ok((file, s(&o.request, "document_sha256").unwrap_or_default().to_string(), s(&o.request, "document_name").unwrap_or("document.pdf").to_string()))
+        // Document `n` of the request (1 is the main one).
+        let d = document::documents(&o.request).into_iter().find(|d| d.n == n).ok_or_else(not_found)?;
+        Ok((d.file, d.sha256, d.name))
     })
     .await?;
     let (file, sha, name) = match gate {
@@ -315,8 +373,8 @@ fn prepare(o: &Opened, body: &Map<String, Value>, today: &str) -> Result<Submiss
     };
     for key in values.keys() {
         let entry = mine.iter().find(|f| s(f, "id") == Some(key.as_str()));
-        if !entry.is_some_and(|f| matches!(s(f, "field_type"), Some("Text" | "Checkbox"))) {
-            errors.push(FieldError::new(format!("values.{key}"), "is not one of your text or checkbox fields"));
+        if !entry.is_some_and(|f| matches!(s(f, "field_type"), Some("Text" | "Checkbox" | "Dropdown" | "Radio" | "Number" | "Attachment"))) {
+            errors.push(FieldError::new(format!("values.{key}"), "is not one of your fields that take a value"));
         }
     }
     let signature = ink(body.get("signature"), "signature").unwrap_or_else(|e| {
@@ -372,6 +430,60 @@ fn prepare(o: &Opened, body: &Map<String, Value>, today: &str) -> Result<Submiss
                     None
                 }
             },
+            Some("Dropdown" | "Radio") => match values.get(fid.to_string().as_str()) {
+                None | Some(Value::Null) => {
+                    if required {
+                        errors.push(at("choose one"));
+                    }
+                    None
+                }
+                Some(Value::String(v)) if document::choices(f).iter().any(|c| c == v) => Some(v.clone()),
+                Some(_) => {
+                    errors.push(at("is not one of the choices"));
+                    None
+                }
+            },
+            Some("Number") => match values.get(fid.to_string().as_str()) {
+                None | Some(Value::Null) => {
+                    if required {
+                        errors.push(at("is required"));
+                    }
+                    None
+                }
+                Some(v @ (Value::String(_) | Value::Number(_))) => match number(f, v) {
+                    Ok(n) if pdf::fit_text(&n, coord(f, "width").unwrap_or_default(), coord(f, "height").unwrap_or_default()).is_some() => Some(n),
+                    Ok(_) => {
+                        errors.push(at("too long to fit its box"));
+                        None
+                    }
+                    Err(m) => {
+                        errors.push(at(&m));
+                        None
+                    }
+                },
+                Some(_) => {
+                    errors.push(at("must be a number"));
+                    None
+                }
+            },
+            Some("Attachment") => {
+                let uploaded = o.signer.get("attachments").and_then(|a| a.get(fid.to_string())).and_then(|u| u.get("file")).and_then(Value::as_str);
+                match (values.get(fid.to_string().as_str()), uploaded) {
+                    (None | Some(Value::Null), None) => {
+                        if required {
+                            errors.push(at("upload a file"));
+                        }
+                        None
+                    }
+                    // The value is the file this signer uploaded for this field, no other.
+                    (None | Some(Value::Null), Some(file)) => Some(file.to_string()),
+                    (Some(Value::String(v)), Some(file)) if v == file => Some(file.to_string()),
+                    (Some(_), _) => {
+                        errors.push(at("is not the file you uploaded here"));
+                        None
+                    }
+                }
+            }
             _ => match values.get(fid.to_string().as_str()) {
                 None | Some(Value::Null) => None,
                 Some(Value::String(t)) => Some(clean(t, MAX_TEXT + 1)).filter(|t| !t.is_empty()),
@@ -401,6 +513,27 @@ fn prepare(o: &Opened, body: &Map<String, Value>, today: &str) -> Result<Submiss
     if errors.is_empty() { Ok(Submission { signature, initials, values: out }) } else { Err(Error::Validation(errors)) }
 }
 
+/// A Number field's value: a decimal with at most the field's places, within its bounds, as text without trailing zeros.
+fn number(f: &Doc, v: &Value) -> std::result::Result<String, String> {
+    let given = match v {
+        Value::String(t) => Value::String(t.trim().to_string()),
+        other => other.clone(),
+    };
+    let d = ferrum_kernel::value::parse_decimal(&given).map_err(|_| "must be a number".to_string())?.normalize();
+    let places = int(f, "decimals").clamp(0, 6) as u32;
+    if d.scale() > places {
+        return Err(if places == 0 { "must be a whole number".into() } else { format!("at most {places} places after the point") });
+    }
+    for (key, below) in [("min_value", true), ("max_value", false)] {
+        if let Some(Ok(b)) = s(f, key).map(|b| ferrum_kernel::value::parse_decimal(&Value::String(b.to_string())))
+            && (if below { d < b } else { d > b })
+        {
+            return Err(format!("must be {} {}", if below { "at least" } else { "at most" }, b.normalize()));
+        }
+    }
+    Ok(d.to_string())
+}
+
 /// `POST /signing/{token}/sign`.
 pub async fn sign(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, raw: &[u8]) -> Result<Reply> {
     if raw.len() > MAX_SIGN_BODY {
@@ -414,7 +547,7 @@ pub async fn sign(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, raw: &[
     let sys = system(k, tenant).await?;
     let (reply, seal_id) = with_retry(|| async {
         let mut tx = k.db.tenant_tx(tenant).await?;
-        let o = open(k, &sys, &mut tx, token_str).await?;
+        let o = open(k, &sys, &mut tx, token_str, c).await?;
         // A repeated submission (a retry after a lost answer) gets the first one's answer.
         if s(&o.signer, "status") == Some("Signed") {
             tx.rollback().await?;
@@ -479,6 +612,10 @@ async fn apply_signature(k: &Kernel, sys: &Ctx, tx: &mut Tx, o: &Opened, plan: S
         Some(Ink::Drawn(_)) => "signature drawn",
         _ => "signature typed",
     };
+    let method = match s(&o.signer, "hosted_by") {
+        Some(host) if s(&o.signer, "delivery") == Some("In Person") => format!("{method}; signed in person, hosted by {host}"),
+        _ => method.to_string(),
+    };
     event::record(k, sys, tx, &o.request, Entry::new("Signed", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref()).details(method))
         .await?;
 
@@ -509,7 +646,7 @@ async fn apply_signature(k: &Kernel, sys: &Ctx, tx: &mut Tx, o: &Opened, plan: S
             after = k.get_tx(sys, tx, "SignRequest", rid, false).await?;
             for sg in request::turn(&after).iter().filter(|r| next.iter().any(|n| n.get("id") == r.get("id"))) {
                 let emailed = out.invite(k, sys, tx, &after, sg, false).await?;
-                let detail = if emailed { "Emailed the signing link" } else { "Signing link given to the sender" };
+                let detail = notice::given(sg, emailed, false);
                 event::record(k, sys, tx, &after, Entry::new("Sent", "system").signer(sg).details(detail)).await?;
                 links.push(notice::link_row(&out, &after, sg, emailed)?);
             }
@@ -541,7 +678,7 @@ pub async fn decline(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, raw:
     let sys = system(k, tenant).await?;
     with_retry(|| async {
         let mut tx = k.db.tenant_tx(tenant).await?;
-        let o = open(k, &sys, &mut tx, token_str).await?;
+        let o = open(k, &sys, &mut tx, token_str, c).await?;
         if s(&o.signer, "status") == Some("Declined") {
             tx.rollback().await?;
             return Ok(Reply::Ok(json!({"status": "Declined", "request_status": s(&o.request, "status"), "replayed": true})));
@@ -719,11 +856,16 @@ pub async fn verify_presented(k: &Kernel, tenant: Uuid, bytes: &[u8]) -> Result<
     let sha = hex::encode(Sha256::digest(bytes));
     let sys = system(k, tenant).await?;
     let mut tx = k.db.tenant_tx(tenant).await?;
-    let found: Option<Uuid> = sqlx::query_scalar("select id from e_sign_request where tenant_id = $1 and sealed_sha256 = $2 and status = 'Completed' limit 1")
-        .bind(tenant)
-        .bind(&sha)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let more = child_table(&sys, "SignRequest", "more_documents")?;
+    // A document sealed here is the request's main one or one of its further documents.
+    let found: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select r.id from e_sign_request r where r.tenant_id = $1 and r.status = 'Completed' and (r.sealed_sha256 = $2 or exists \
+         (select 1 from {more} m where m.tenant_id = r.tenant_id and m.parent_id = r.id and m.sealed_sha256 = $2)) limit 1"
+    )))
+    .bind(tenant)
+    .bind(&sha)
+    .fetch_optional(&mut *tx)
+    .await?;
     let Some(rid) = found else {
         tx.commit().await?;
         return Ok(
@@ -733,7 +875,8 @@ pub async fn verify_presented(k: &Kernel, tenant: Uuid, bytes: &[u8]) -> Result<
     let doc = k.get_tx(&sys, &mut tx, "SignRequest", rid, false).await?;
     tx.commit().await?;
     // The stored copy must still match its record too.
-    let stored = match s(&doc, "sealed_document").and_then(document::file_id) {
+    let matched = document::documents(&doc).into_iter().find(|d| d.sealed_sha256.as_deref() == Some(sha.as_str()));
+    let stored = match matched.as_ref().and_then(|d| d.sealed_document.as_deref()).and_then(document::file_id) {
         Some(f) => document::bytes(k, tenant, f).await.ok().map(|b| hex::encode(Sha256::digest(&b))),
         None => None,
     };
@@ -742,8 +885,119 @@ pub async fn verify_presented(k: &Kernel, tenant: Uuid, bytes: &[u8]) -> Result<
     }
     let signers: Vec<Value> =
         rows(&doc, "signers").iter().map(|r| json!({"name": s(r, "name"), "role": s(r, "role"), "signed_at": s(r, "signed_at")})).collect();
+    let seal = crate::pades::check(bytes)
+        .map(|c| json!({"valid": c.valid, "problem": c.problem, "subject": c.subject, "certificate_sha256": c.certificate_sha256, "timestamp": c.timestamp}));
+    if seal.as_ref().is_some_and(|s| s["valid"] == json!(false)) {
+        return Ok(json!({"valid": false, "sha256": sha, "seal": seal, "message": "The workspace's digital seal in this file does not verify."}));
+    }
     Ok(json!({
-        "valid": true, "sha256": sha,
+        "valid": true, "sha256": sha, "seal": seal,
         "request": {"number": s(&doc, "number"), "title": s(&doc, "title"), "completed_at": s(&doc, "completed_at"), "signers": signers},
     }))
+}
+
+/// Largest file a signer attaches.
+pub const MAX_ATTACHMENT: usize = 10 * 1024 * 1024;
+/// Uploads one signer may make for one Attachment field (each replaces the last).
+const MAX_UPLOADS: i64 = 3;
+
+/// The kind of a file by its first bytes, not by what the caller says it is: `(kind, content type)`.
+pub fn sniff(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(b"%PDF-") {
+        Some(("pdf", "application/pdf"))
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(("png", "image/png"))
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(("jpg", "image/jpeg"))
+    } else {
+        None
+    }
+}
+
+/// `POST /signing/{token}/attachments/{field}`: the file is the body; `name` is the caller's name for it. Checked by its
+/// first bytes against the field's kinds, stored outside any transaction only after the link has been checked, then
+/// attached to the request and recorded on the signer under the request's lock; a file refused after it was stored is
+/// deleted again. A new upload replaces the last (at most three per field).
+pub async fn attach(k: &Kernel, tenant: Uuid, token_str: &str, c: &Client, field: &str, name: &str, bytes: &[u8]) -> Result<Reply> {
+    if bytes.is_empty() || bytes.len() > MAX_ATTACHMENT {
+        return Err(Error::invalid(format!("send a file of 1 byte to {} MB", MAX_ATTACHMENT / 1024 / 1024)));
+    }
+    let fid: Uuid = field.parse().map_err(|_| not_found())?;
+    // First the link, the field and the count, with nothing stored yet: an outsider with no valid link stores nothing.
+    let kinds = with_link(k, tenant, token_str, c, |o, tx, _sys| async move {
+        tx.commit().await?;
+        let f = o.my_fields().into_iter().find(|f| id(f, "id") == Some(fid)).filter(|f| s(f, "field_type") == Some("Attachment")).ok_or_else(not_found)?;
+        if upload_count(&o.signer, fid) >= MAX_UPLOADS {
+            return Err(Error::invalid("you have uploaded a file here too many times"));
+        }
+        Ok(document::accepted(&f))
+    })
+    .await?;
+    let kinds = match kinds {
+        Gate::Open(v) => v,
+        Gate::Gone(m, st) => return Ok(Reply::Gone(m, st)),
+    };
+    let (kind, mime) = sniff(bytes)
+        .filter(|(kind, _)| kinds.iter().any(|a| a == kind))
+        .ok_or_else(|| Error::invalid(format!("this field takes {} files; the file is not one", kinds.join(", "))))?;
+    let sys = system(k, tenant).await?;
+    let clean_name = {
+        let n = clean(name, 100);
+        let n: String = n.chars().filter(|ch| !matches!(ch, '/' | '\\' | '"' | '<' | '>')).collect();
+        if n.trim().is_empty() { format!("attachment.{kind}") } else { n.trim().to_string() }
+    };
+    let stored = k.store_file(&sys, None, &clean_name, mime, bytes).await?;
+    let file: Uuid = stored.get("id").and_then(Value::as_str).and_then(|v| v.parse().ok()).ok_or_else(|| Error::internal("stored file without id"))?;
+    let sha = hex::encode(Sha256::digest(bytes));
+    let size = bytes.len();
+    let recorded = with_link(k, tenant, token_str, c, |o, mut tx, sys| {
+        let (clean_name, sha) = (clean_name.clone(), sha.clone());
+        async move {
+            // Under the request's lock, again: another upload may have used the last place.
+            let f = o.my_fields().into_iter().find(|f| id(f, "id") == Some(fid)).filter(|f| s(f, "field_type") == Some("Attachment")).ok_or_else(not_found)?;
+            let uploads = upload_count(&o.signer, fid);
+            if uploads >= MAX_UPLOADS {
+                tx.rollback().await?;
+                return Err(Error::invalid("you have uploaded a file here too many times"));
+            }
+            let mut all = o.signer.get("attachments").and_then(Value::as_object).cloned().unwrap_or_default();
+            let replaced = all.get(&fid.to_string()).and_then(|u| u.get("file")).and_then(Value::as_str).and_then(|v| v.parse::<Uuid>().ok());
+            all.insert(fid.to_string(), json!({"file": file, "name": clean_name, "size": size, "sha256": sha, "uploads": uploads + 1}));
+            document::attach(&mut tx, tenant, file, "SignRequest", doc_id(&o.request)?).await?;
+            set_signer(k, &sys, &mut tx, doc_id(&o.signer)?, json!({"attachments": Value::Object(all)})).await?;
+            let actor = s(&o.signer, "email").unwrap_or_default().to_string();
+            let detail = format!("{}: {clean_name} ({size} bytes, SHA-256 {sha})", s(&f, "label").unwrap_or("Attachment"));
+            event::record(
+                k,
+                &sys,
+                &mut tx,
+                &o.request,
+                Entry::new("Attachment Added", &actor).signer(&o.signer).client(&o.ip_hash(c), c.user_agent.as_deref()).details(detail),
+            )
+            .await?;
+            tx.commit().await?;
+            Ok(replaced)
+        }
+    })
+    .await;
+    match recorded {
+        Ok(Gate::Open(replaced)) => {
+            if let Some(old) = replaced {
+                let _ = k.delete_file(&sys, old).await;
+            }
+            Ok(Reply::Ok(json!({"field": fid, "name": clean_name, "size": size, "file": file})))
+        }
+        Ok(Gate::Gone(m, st)) => {
+            let _ = k.delete_file(&sys, file).await;
+            Ok(Reply::Gone(m, st))
+        }
+        Err(e) => {
+            let _ = k.delete_file(&sys, file).await;
+            Err(e)
+        }
+    }
+}
+
+fn upload_count(signer: &Doc, field: Uuid) -> i64 {
+    signer.get("attachments").and_then(|a| a.get(field.to_string())).and_then(|u| u.get("uploads")).and_then(Value::as_i64).unwrap_or(0)
 }

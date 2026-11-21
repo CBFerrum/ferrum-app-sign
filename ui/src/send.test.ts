@@ -34,7 +34,7 @@ describe("preparing a request", () => {
   it("saves the whole draft, with a code only when one was typed", () => {
     const d = editSigner(draftOf(request()), "s1", { accessCode: "7731" });
     const body = bodyOf(d);
-    expect(body.signers[0]).toEqual({ id: "s1", role: "Client", name: "Jane Doe", email: "jane@client.test", signing_order: 1, access_code: "7731" });
+    expect(body.signers[0]).toEqual({ id: "s1", role: "Client", name: "Jane Doe", email: "jane@client.test", signing_order: 1, delivery: "Email", access_code: "7731" });
     expect(body.signers[1]).not.toHaveProperty("access_code");
     expect(body.fields[0]).toMatchObject({ id: "f1", x: "72", y: "600" });
     expect(body).toMatchObject({ title: "Master Services Agreement", message: null, expires_on: null, signing_mode: "Sequential" });

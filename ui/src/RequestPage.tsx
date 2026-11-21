@@ -45,6 +45,7 @@ export function RequestView({ request: r }: { request: SignRequest }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [voiding, setVoiding] = useState(false);
   const [correcting, setCorrecting] = useState<Signer | null>(null);
+  const [hosting, setHosting] = useState<Signer | null>(null);
   const [about, setAbout] = useState(false);
   const events = useQuery(eventsQuery(r.id));
   const [verify, setVerify] = useState<{ at: number; result: Verify } | null>(null);
@@ -153,7 +154,7 @@ export function RequestView({ request: r }: { request: SignRequest }) {
             <h2 id="signers-head" className="sg-h2">
               {tr("Signers")} <span className="faint">{isolate(s.text)}</span>
             </h2>
-            <Signers request={r} onAgain={(x) => void again(x)} onCorrect={setCorrecting} />
+            <Signers request={r} onAgain={(x) => void again(x)} onCorrect={setCorrecting} onHost={setHosting} />
           </section>
           <section aria-labelledby="trail-head">
             <h2 id="trail-head" className="sg-h2">
@@ -255,6 +256,7 @@ export function RequestView({ request: r }: { request: SignRequest }) {
       <LinksDialog open={links !== null} title={links?.title ?? ""} links={links?.list ?? []} onClose={() => setLinks(null)} />
       {voiding && <VoidDialog request={r} onClose={() => setVoiding(false)} />}
       {correcting && <CorrectDialog request={r} signer={correcting} onClose={() => setCorrecting(null)} />}
+      {hosting && <HostDialog request={r} signer={hosting} onClose={() => setHosting(null)} />}
       <Dialog open={about} onClose={() => setAbout(false)} title={tr("What kind of signature this is")} footer={<Button variant="primary" onClick={() => setAbout(false)}>{tr("Got it")}</Button>}>
         <div className="stack sg-about" style={{ gap: 10 }}>
           <p>
@@ -274,7 +276,7 @@ export function RequestView({ request: r }: { request: SignRequest }) {
 
 const ICON = { done: Check, now: Clock, later: Clock, declined: X } as const;
 
-function Signers({ request: r, onAgain, onCorrect }: { request: SignRequest; onAgain: (s: Signer) => void; onCorrect: (s: Signer) => void }) {
+function Signers({ request: r, onAgain, onCorrect, onHost }: { request: SignRequest; onAgain: (s: Signer) => void; onCorrect: (s: Signer) => void; onHost: (s: Signer) => void }) {
   const turn = turnOf(r);
   const open = isOpen(r.status);
   const sorted = [...r.signers].sort((a, b) => (r.signing_mode === "Parallel" ? 0 : a.signing_order - b.signing_order));
@@ -312,7 +314,8 @@ function Signers({ request: r, onAgain, onCorrect }: { request: SignRequest; onA
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  {state === "now" && <DropdownMenuItem onSelect={() => onAgain(p)}>{tr("Send their link again")}</DropdownMenuItem>}
+                  {state === "now" && (p.delivery ?? "Email") === "Email" && <DropdownMenuItem onSelect={() => onAgain(p)}>{tr("Send their link again")}</DropdownMenuItem>}
+                  {state === "now" && p.delivery === "In Person" && <DropdownMenuItem onSelect={() => onHost(p)}>{tr("Sign in person here…")}</DropdownMenuItem>}
                   <DropdownMenuItem onSelect={() => onCorrect(p)}>{tr("Correct their name or email…")}</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -507,6 +510,59 @@ function CorrectDialog({ request: r, signer, onClose }: { request: SignRequest; 
         <Field label={tr("Email")} htmlFor="c-email" required>
           <input id="c-email" className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
         </Field>
+      </form>
+    </Dialog>
+  );
+}
+
+// ───────────────────────── in person ─────────────────────────
+
+/** The host opens an in-person signer's page on this device, after saying they checked who is signing. The page
+ *  opens in a new tab for the signer; the trail and the certificate name the host. */
+export function HostDialog({ request: r, signer, onClose }: { request: SignRequest; signer: Signer; onClose: () => void }) {
+  const [checked, setChecked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const go = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!checked) return setError(tr("Confirm that you checked who is signing."));
+    setBusy(true);
+    setError(null);
+    try {
+      const { url } = await act<{ url: string }>(r.id, "signing_link", { signer: signer.id ?? signer.role, checked_identity: true });
+      window.open(url, "_blank", "noopener");
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={tr("Sign in person: {value}", { value: signer.name || signer.role })}
+      footer={
+        <>
+          <Button onClick={onClose}>{tr("Cancel")}</Button>
+          <Button variant="primary" type="submit" form="host-form" loading={busy}>
+            {tr("Open their page")}
+          </Button>
+        </>
+      }
+    >
+      <form id="host-form" className="stack" style={{ gap: 10 }} onSubmit={(e) => void go(e)}>
+        <p>{tr("Their page opens on this device for 15 minutes. Hand it to them to sign; you are named as the host in the trail and on the certificate.")}</p>
+        <label className="sg-consent">
+          <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+          <span>{placed(tr("I checked that the person signing is {p1}."), { p1: <strong>{isolate(signer.name || signer.email || signer.role)}</strong> })}</span>
+        </label>
+        {error && (
+          <p className="field-error" role="alert">
+            {isolate(error)}
+          </p>
+        )}
       </form>
     </Dialog>
   );

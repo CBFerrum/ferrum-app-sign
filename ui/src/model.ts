@@ -23,7 +23,12 @@ export interface Signer {
   /** Set when the signer has an access code; the code itself is never given back. */
   access_code_hash?: string | null;
   signature_text?: string | null;
+  /** How they get to their page: a mailed link, a page another app opens, or hosted here in person. */
+  delivery?: Delivery | null;
+  hosted_by?: string | null;
 }
+
+export type Delivery = "Email" | "Link" | "In Person";
 
 export interface FieldRow {
   id?: string;
@@ -37,6 +42,13 @@ export interface FieldRow {
   height: number | string;
   required?: boolean;
   value?: string | null;
+  options?: string[] | null;
+  option_boxes?: number[][] | null;
+  min_value?: string | null;
+  max_value?: string | null;
+  decimals?: number | null;
+  accept?: string | null;
+  document_no?: number | null;
 }
 
 export interface SignRequest {
@@ -51,6 +63,8 @@ export interface SignRequest {
   document_sha256?: string | null;
   page_count?: number | null;
   page_sizes?: [number, number][] | null;
+  /** Documents 2 onwards of the request (the first is the fields above). */
+  more_documents?: { id?: string; document?: string | null; document_name?: string | null; page_count?: number | null; page_sizes?: [number, number][] | null }[] | null;
   signing_mode: "Sequential" | "Parallel";
   expires_on?: string | null;
   expires_at?: string | null;

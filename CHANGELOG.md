@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.6.0
+
+Needs the same platform as 0.5.3. Package `sign` 0.3.4 (new entities SignDocument, SignBulkSend, SignBulkRecipient; new fields on
+SignField, SignRequest, SignRequestSigner, SignSettings; message templates; one connection description). New dependencies:
+`x509-cert`, `der`, `p256`, `p384` (the platform's lock already holds the last three). Interface rebuilt (`ui/dist`).
+The package no longer needs the Mail app: its mails are Sign's own message templates, sent through the platform.
+
+- **Fields.** Dropdown, Radio (one box per choice), Number (bounds, places) and Attachment (PDF, PNG or JPEG by its bytes, at
+  most 10 MB, three uploads a field, listed with its SHA-256 on the certificate). A new public route takes the upload.
+- **Several documents** in one request (at most 20): each its own boxes, signed and sealed with its own values, one certificate on the
+  main document listing every hash; `verify` and the public check cover each; the outbox event names each sealed document.
+- **Wording and brand.** Invitation, reminder, withdrawal and signed-copy mails are message templates a workspace edits; the signing
+  link is a secret value (a placeholder in the message log); Sign Settings choose the Brand shown on the signing page and may word
+  the consent sentence, which is then printed on the certificate. Sign no longer writes the Mail app's records.
+- **Digital seal.** Every finished document is signed with the workspace's own key (P-256 or P-384, made once and kept in the vault; a
+  certificate authority's key and certificate may replace it, RSA keys are refused): CAdES detached, certified with no later change
+  allowed, the audit trail attached as `audit-trail.json`, and an RFC 3161 time stamp when the workspace names a time-stamping authority
+  connection. `verify` and the public check report the seal.
+- **Bulk send.** One template to up to 1000 recipients, one request each, a few every minute by upkeep, each row once, a daily limit,
+  failed rows recorded, people forgotten once sent.
+- **Embedding.** `Allow Embedding` sets the Embedding for `sign/s`; the page tells the framing site when the signer is done; the
+  fallback page carries the workspace's brand.
+
+## 0.5.3
+
+Needs the same platform as 0.5.2. Package `sign` 0.3.3 (two trail events).
+
+- **The upgrade no longer fails on an old Completed request without its seal.** The database check that a request is
+  Completed only with its sealed PDF is added `not valid`: it holds for every new and changed row from the first
+  moment, and the rows already there are not checked. Upkeep seals each old request that lacks its seal (the trail gets
+  `Sealed`; its completion is not recorded again, nobody is mailed again) or, for one it cannot seal, records
+  `Seal Failed` once and tells the sender; once none is left it has the database validate the constraint (a step that
+  holds no write and is safe to repeat).
+- **A signed-in customer opens a signing link like anyone.** A caller who carries a site session is served exactly as
+  a caller without one; the link's token is the only right. The trail names the signer, never the session's person.
+
+## 0.5.2
+
+Needs Ferrum with `Ctx::at_screen()` (S1-P0c). Package `sign` 0.3.2 (one option, one field, one parameter). Interface
+rebuilt (`ui/dist`).
+
+- **In-person signing.** A signer's delivery can be In Person. On the request's page, "Sign in person here" asks the
+  host to confirm they checked who is signing, then opens that signer's page on this device for 15 minutes. Only a
+  person signed in at the screen can host: an app's call, an API key, a job or an agent is refused. The host is named
+  on the signer, in the trail ("signed in person, hosted by …") and on the certificate.
+- The send step asks how each signer signs: by email, or in person here.
+
+## 0.5.1
+
+Needs the same platform as 0.5.0. Package `sign` 0.3.1 (two signer fields, one action). No interface screen added; the
+signer's page sends a session it was opened with.
+
+- **A signer whose page another app opens.** A signer's `delivery` can be Link: nothing is mailed to them, and their
+  link alone opens nothing. The app that asked (or the sender) calls `signing_link` and gets a link that opens that
+  signer's page for 1 to 60 minutes (never past the request's expiry), bound to the signer and that moment by a tag
+  under the workspace's signing key; framed only on a site the workspace allows for `sign/s`. Each link issued is in
+  the trail. No reminders go to such a signer.
+- **Forwarded links show.** Every device that opens a signing link is kept as a keyed hash; a second device is a
+  "Viewed: another device" line in the trail.
+
+## 0.5.0
+
+Needs the same platform as 0.4.2. Package `sign` 0.3.0: callers declare `uses` at `^0.3` (Contracts' `^0.2` uses
+move with it). No database change. Interface unchanged.
+
+- **Other apps reach Sign through its operations.** Every action a person can press says what it does, what it returns
+  and what "done" means (`contract:`), and declares the parameters it reads. Another app asks for a signature with
+  `sign.sign_request.create` (`send_on_create`) through its `uses` and `Kernel::call_tx`: once per key, as the person it
+  acts for. The Rust entry point `send_for_signature` and the unused `identity` interface are gone.
+- **A void is told.** Voiding raises `sign.request_voided` with the reason, beside completed, declined, expired and
+  failed.
+- **Requests from other records ask for a code.** A request sent as it is made (by an app or a configured step) asks
+  each signer to confirm a code sent to their own e-mail unless the caller chose otherwise; a request made on the screen
+  asks for none unless chosen. The request's own default is now empty rather than None.
+- **Verify Integrity is read-only.**
+
+## 0.4.2
+
+Needs Ferrum with K0-1 (`reports::readable_choice`). No database or interface change.
+
+- **Reports read only what the caller may read.** Time to Complete grouped by Sender showed senders' addresses to a
+  role whose rules hide them. Each report now refuses a grouping on a field the caller cannot read, and refuses a
+  report whose figures come from one (completion times without `completed_at`, pending signers without `signers`)
+  instead of answering with numbers computed from it.
+
+## 0.4.1
+
+Needs the same platform as 0.4.0. One database change: `packages/sign/sql/002_completed_is_sealed.sql` adds a check. No
+interface change.
+
+- **A seal that failed is retried for every request.** Upkeep retried sealing only when every row of a request had
+  signed, so a request with a recipient of a copy, or with a signing group whose other members were not needed, stayed
+  In Progress, fully signed and unsealed, after one failed try. It now retries every request that is signed by everyone
+  who signs, and seals it once.
+- **A request is never Completed without its seal.** The database refuses a Completed request with no sealed PDF or no
+  SHA-256, whoever writes it.
+- **A failure always reaches a person.** Notices meant for a request's sender (sealing failed, declined, expired) go to
+  every Sign Manager when no person made the request (a configured step's or the system's).
+
 ## 0.4.0
 
 No database or interface change. Needs Ferrum 0.4.0 (apps' upkeep runs one workspace at a time, on whichever replica is free).

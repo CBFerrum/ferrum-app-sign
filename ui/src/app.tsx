@@ -49,6 +49,7 @@ mountApp({
       children: [
         { index: true, element: <Requests /> },
         { path: "new", lazy: () => import("./New").then((m) => ({ Component: m.NewRequest })) },
+        { path: "bulk", lazy: () => import("./BulkSend").then((m) => ({ Component: m.BulkSend })) },
         { path: "templates", lazy: () => import("./Templates").then((m) => ({ Component: m.Templates })) },
         { path: "template/:id/fields", lazy: () => import("./TemplateFields").then((m) => ({ Component: m.TemplateFieldsRoute })) },
         { path: "request/:id", lazy: () => import("./RequestPage").then((m) => ({ Component: m.RequestRoute })) },

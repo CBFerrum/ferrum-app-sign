@@ -94,6 +94,11 @@ impl DocHook for RequestHook {
         if !doc.contains_key("created_at") && s(doc, "sender_email").is_none() && !hc.ctx.user.is_nil() {
             doc.insert("sender_email".into(), json!(hc.ctx.email.to_lowercase()));
         }
+        // A request sent as it is made comes from another record (an app's `call_tx`, a configured step): its signers
+        // confirm a code sent to their own address unless the caller chose otherwise. The screens never set it.
+        if !doc.contains_key("created_at") && crate::b(doc, "send_on_create") && s(doc, "verify_identity").is_none() {
+            doc.insert("verify_identity".into(), json!("Email Code"));
+        }
 
         // Access codes are kept only as Argon2id hashes.
         if let Some(Value::Array(signers)) = doc.get_mut("signers") {
@@ -151,7 +156,7 @@ impl DocHook for RequestHook {
     }
 
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
-        if !["send", "remind", "resend", "void", "verify"].contains(&name) {
+        if !["send", "remind", "resend", "void", "verify", "signing_link"].contains(&name) {
             return Ok(None);
         }
         // The kernel locked the row; read it again so the signers are current (see `lock_request`).
@@ -163,6 +168,7 @@ impl DocHook for RequestHook {
             "resend" => resend(hc, doc, params).await?,
             "void" => void(hc, doc, params).await?,
             "verify" => verify(hc.kernel, hc.ctx, hc.tx, doc).await?,
+            "signing_link" => signing_link(hc, doc, params).await?,
             _ => return Ok(None),
         }))
     }
@@ -292,14 +298,16 @@ pub(crate) async fn send(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     let mut first_event = None;
     for sg in turn(&sent) {
         let emailed = out.invite(k, &ectx, hc.tx, &sent, &sg, false).await?;
-        let detail = if emailed { "Emailed the signing link" } else { "Signing link given to the sender" };
+        let detail = notice::given(&sg, emailed, false);
         let ev = event::record(k, &ectx, hc.tx, &sent, Entry::new("Sent", &ctx.email).signer(&sg).details(detail)).await?;
         first_event.get_or_insert(ev);
         links.push(notice::link_row(&out, &sent, &sg, emailed)?);
     }
     // The original now belongs to the audit trail: its sender can no longer delete it.
-    if let (Some(ev), Some(file)) = (first_event, s(&sent, "document").and_then(document::file_id)) {
-        document::freeze(hc.tx, ctx.tenant, file, ev).await?;
+    if let Some(ev) = first_event {
+        for d in document::documents(&sent) {
+            document::freeze(hc.tx, ctx.tenant, d.file, ev).await?;
+        }
     }
     if !out.mail {
         notice::links_to(hc.tx, ctx, &sent, &links).await?;
@@ -321,7 +329,7 @@ async fn remind(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     for sg in targets {
         let emailed = out.invite(k, &ectx, hc.tx, doc, &sg, true).await?;
         set_signer(k, &ectx, hc.tx, doc_id(&sg)?, json!({"last_reminded_at": at})).await?;
-        let detail = if emailed { "Emailed a reminder" } else { "Signing link given to the sender" };
+        let detail = if emailed { "Emailed a reminder" } else { notice::given(&sg, false, false) };
         event::record(k, &ectx, hc.tx, doc, Entry::new("Reminded", &ctx.email).signer(&sg).details(detail)).await?;
         links.push(notice::link_row(&out, doc, &sg, emailed)?);
     }
@@ -329,6 +337,68 @@ async fn remind(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
         notice::links_to(hc.tx, ctx, doc, &links).await?;
     }
     Ok(json!({"reminded": links}))
+}
+
+/// The signer a request's action names: their row id, role or email.
+fn named<'a>(signers: &'a [Doc], want: &str) -> Result<&'a Doc> {
+    signers
+        .iter()
+        .find(|r| {
+            s(r, "id") == Some(want)
+                || role_key(s(r, "role").unwrap_or_default()) == role_key(want)
+                || s(r, "email").is_some_and(|e| e.eq_ignore_ascii_case(want))
+        })
+        .ok_or_else(|| Error::field("signer", format!("no signer {want} on this request")))
+}
+
+/// `signing_link`: a link that opens the signing page of a signer whose link is not mailed, for minutes (S11-G1). Their
+/// bare link opens nothing (`signing::open`); this one carries a session bound to them and its moment. Framed only on a
+/// site the workspace allows for `sign/s` (BD-80: the platform sets the page's frame policy). An in-person signer's is
+/// asked by a person at the screen (`Ctx::at_screen`), who says they checked who signs and is named as the host.
+async fn signing_link(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Value> {
+    let (k, ctx) = (hc.kernel, hc.ctx);
+    not_expired(doc)?;
+    let want =
+        params.get("signer").and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| Error::field("signer", "name the signer"))?;
+    let all = rows(doc, "signers");
+    let found = named(&all, want)?;
+    if !notice::linked(found) {
+        return Err(Error::invalid(format!("{}'s link is mailed: use Resend Links", s(found, "role").unwrap_or("this signer"))));
+    }
+    let Some(sg) = waiting(doc).into_iter().find(|r| id(r, "id") == id(found, "id")) else {
+        return Err(Error::invalid(format!(
+            "{} cannot sign now (status {})",
+            s(found, "role").unwrap_or("this signer"),
+            s(found, "status").unwrap_or("Waiting")
+        )));
+    };
+    let minutes = match params.get("minutes") {
+        None | Some(Value::Null) => 15,
+        Some(v) => v.as_i64().filter(|m| (1..=60).contains(m)).ok_or_else(|| Error::field("minutes", "1 to 60"))?,
+    };
+    let embed = params.get("embed").and_then(Value::as_bool).unwrap_or(false);
+    if embed && k.embedders(ctx.tenant, "sign/s").await?.is_empty() {
+        return Err(Error::field("embed", "no site may frame the signing page: allow one first (Sign Settings, Allow Embedding)"));
+    }
+    let in_person = s(&sg, "delivery") == Some("In Person");
+    if in_person {
+        // A decision only a person makes (BD-83): not an app's call, a key, a job or an agent.
+        if !ctx.at_screen() {
+            return Err(Error::Forbidden("in-person signing is hosted by a person signed in at this screen".into()));
+        }
+        if params.get("checked_identity").and_then(Value::as_bool) != Some(true) {
+            return Err(Error::field("checked_identity", "confirm that you checked who is signing"));
+        }
+        set_signer(k, &elevated(ctx), hc.tx, doc_id(&sg)?, json!({"hosted_by": ctx.email.to_lowercase()})).await?;
+    }
+    let out = Outbox::load(k, ctx, hc.tx).await?;
+    let (url, until) = out.session_link(doc, &sg, minutes, embed)?;
+    let detail = match in_person {
+        true => format!("In person for {minutes} minutes, hosted by {}, who confirmed who is signing", ctx.email.to_lowercase()),
+        false => format!("Link for {minutes} minutes{}", if embed { ", framed on an allowed site" } else { "" }),
+    };
+    event::record(k, &elevated(ctx), hc.tx, doc, Entry::new("Link Issued", &ctx.email).signer(&sg).details(detail)).await?;
+    Ok(json!({"url": url, "expires_at": ts(until)}))
 }
 
 /// Sends the invitation again: to everyone whose turn it is, or to one signer (`signer`: a row
@@ -341,14 +411,7 @@ async fn resend(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Value
         None => current,
         Some(want) => {
             let all = rows(doc, "signers");
-            let found = all
-                .iter()
-                .find(|r| {
-                    s(r, "id") == Some(want)
-                        || role_key(s(r, "role").unwrap_or_default()) == role_key(want)
-                        || s(r, "email").is_some_and(|e| e.eq_ignore_ascii_case(want))
-                })
-                .ok_or_else(|| Error::field("signer", format!("no signer {want} on this request")))?;
+            let found = named(&all, want)?;
             match current.into_iter().find(|r| id(r, "id") == id(found, "id")) {
                 Some(r) => vec![r],
                 None => {
@@ -371,7 +434,7 @@ async fn resend(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Value
     for sg in targets {
         let emailed = out.invite(k, &ectx, hc.tx, doc, &sg, false).await?;
         set_signer(k, &ectx, hc.tx, doc_id(&sg)?, json!({"sent_at": at})).await?;
-        let detail = if emailed { "Emailed the signing link again" } else { "Signing link given to the sender again" };
+        let detail = notice::given(&sg, emailed, true);
         event::record(k, &ectx, hc.tx, doc, Entry::new("Resent", &ctx.email).signer(&sg).details(detail)).await?;
         links.push(notice::link_row(&out, doc, &sg, emailed)?);
     }
@@ -401,7 +464,8 @@ async fn void(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Value> 
         },
     )
     .await?;
-    if crate::can_email(k, ctx) {
+    crate::envelope::ended(hc.tx, ctx, &voided, "Voided").await?;
+    if crate::can_email(k) {
         let out = Outbox::load(k, ctx, hc.tx).await?;
         for sg in rows(&voided, "signers").iter().filter(|r| matches!(s(r, "status"), Some("Sent" | "Viewed" | "Signed"))) {
             out.withdrawn(k, &ectx, hc.tx, &voided, sg).await?;
@@ -513,15 +577,39 @@ pub async fn verify(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Val
     if problem.is_none() && count("Signed") < signed {
         problem = Some("signatures are missing from the trail".into());
     }
-    if problem.is_none() && status(doc) == "Completed" && trail.last().map(|r| r.event.as_str()) != Some("Completed") {
+    // After the completion only a late seal, or the note that it could not be made, may follow.
+    let after = trail.iter().rev().take_while(|r| matches!(r.event.as_str(), "Sealed" | "Seal Failed")).count();
+    let completes = trail.len() > after && trail[trail.len() - after - 1].event == "Completed";
+    if problem.is_none() && status(doc) == "Completed" && !completes {
         problem = Some("the trail does not end with the completion".into());
     }
-    let valid = original["ok"] == json!(true) && (sealed.is_null() || sealed["ok"] == json!(true)) && problem.is_none();
+    // The workspace's digital seal in the sealed file, checked from the file alone (none in files sealed before it existed).
+    let seal = match s(doc, "sealed_document").and_then(document::file_id) {
+        Some(f) => document::bytes(k, ctx.tenant, f).await.ok().and_then(|b| crate::pades::check(&b)),
+        None => None,
+    };
+    let seal_ok = seal.as_ref().is_none_or(|c| c.valid);
+    let seal = seal
+        .map(|c| json!({"valid": c.valid, "problem": c.problem, "subject": c.subject, "certificate_sha256": c.certificate_sha256, "timestamp": c.timestamp}));
+    // The other documents of the request, each checked the same way.
+    let mut others = Vec::new();
+    for d in document::documents(doc).into_iter().filter(|d| d.n > 1) {
+        let original = file_check(k, ctx.tenant, Some(&format!("/files/{}", d.file)), Some(&d.sha256), false).await;
+        let sealed = match d.sealed_document.as_deref() {
+            Some(path) => file_check(k, ctx.tenant, Some(path), d.sealed_sha256.as_deref(), true).await,
+            None => Value::Null,
+        };
+        others.push(json!({"n": d.n, "name": d.name, "original": original, "sealed": sealed}));
+    }
+    let all_ok = others.iter().all(|o| o["original"]["ok"] == json!(true) && (o["sealed"].is_null() || o["sealed"]["ok"] == json!(true)));
+    let valid = original["ok"] == json!(true) && (sealed.is_null() || sealed["ok"] == json!(true)) && all_ok && seal_ok && problem.is_none();
     Ok(json!({
         "valid": valid,
         "status": status(doc),
         "original": original,
         "sealed": sealed,
+        "seal": seal,
+        "documents": others,
         "audit_trail": {"ok": problem.is_none(), "events": check.events, "head": check.head, "problem": problem},
     }))
 }

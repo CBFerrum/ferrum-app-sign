@@ -13,6 +13,8 @@ export function NewRequest() {
   useShellTitle(t("New request"));
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
+  // Further documents signed in the same request, at most 19.
+  const [more, setMore] = useState<File[]>([]);
   const [title, setTitle] = useState("");
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -32,13 +34,22 @@ export function NewRequest() {
     take(e.dataTransfer.files[0]);
   };
 
+  const addMore = (list: FileList | null) => {
+    const picked = Array.from(list ?? []);
+    const why = picked.map(refusal).find(Boolean) ?? null;
+    setError(why);
+    if (!why) setMore((m) => [...m, ...picked].slice(0, 19));
+  };
+
   const start = async () => {
     if (!file) return;
     setBusy(true);
     setError(null);
     try {
       const stored = await uploadFile(file);
-      const made = await api.post<{ id: string }>("/api/v1/SignRequest", { title: title.trim(), document: stored.url });
+      const further = [];
+      for (const f of more) further.push({ document: (await uploadFile(f)).url });
+      const made = await api.post<{ id: string }>("/api/v1/SignRequest", { title: title.trim(), document: stored.url, ...(further.length ? { more_documents: further } : {}) });
       navigate(`/request/${made.id}/prepare`);
     } catch (e) {
       setError(errorMessage(e));
@@ -79,6 +90,22 @@ export function NewRequest() {
             <Field label={t("Title")} htmlFor="new-title" hint={t("Signers see this in their email and on their page.")}>
               <input id="new-title" className="input" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} />
             </Field>
+            <Field label={t("More documents")} htmlFor="new-more" hint={t("Signed in the same request, each with its own boxes. At most 19 more.")}>
+              <input id="new-more" type="file" multiple accept="application/pdf,.pdf" className="input" onChange={(e) => { addMore(e.target.files); e.target.value = ""; }} />
+            </Field>
+            {more.length > 0 && (
+              <ul className="stack" aria-label={t("More documents")}>
+                {more.map((f, i) => (
+                  <li key={`${f.name}-${i}`} className="row">
+                    <span>{isolate(f.name)}</span>
+                    <span className="spacer" />
+                    <Button size="sm" onClick={() => setMore((m) => m.filter((_, j) => j !== i))}>
+                      {t("Remove")}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <div className="row">
               <Button variant="primary" loading={busy} disabled={!title.trim()} onClick={() => void start()}>
                 {t("Continue to the signers")}

@@ -6,7 +6,7 @@
 // every box a button.
 
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Ban, Check, CircleAlert, Clock, Copy, Download, Ellipsis, FileText, Info, Link2Off, PenLine, Signature } from "lucide-react";
+import { Ban, Check, CircleAlert, Clock, Copy, Download, Ellipsis, FileText, Info, Link2Off, Paperclip, PenLine, Signature } from "lucide-react";
 import { bootstrap, saveBlob, t as tr, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, Dialog, Field, Menu, MenuItem, Spinner, toast, useShellTitle, placed } from "@ferrum/kit";
 import { copyText } from "./clipboard";
@@ -26,6 +26,7 @@ import {
   isDone,
   locate,
   type Mark,
+  type PageSize,
   nextTask,
   pagesText,
   pagesWithFields,
@@ -52,6 +53,10 @@ const LABEL: Record<FieldType, string> = {
   get Name() { return tr("Name"); },
   get Text() { return tr("Text"); },
   get Checkbox() { return tr("Tick"); },
+  get Dropdown() { return tr("Choose"); },
+  get Radio() { return tr("Choose"); },
+  get Number() { return tr("Number"); },
+  get Attachment() { return tr("Attach a file"); },
 };
 
 const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -62,10 +67,20 @@ type Phase = Reached | { kind: "loading" } | { kind: "signed"; requestStatus: st
 
 export function SigningPage() {
   const link = useMemo(() => locate(window.location.pathname), []);
+  // A signer whose link is not mailed comes with a session the requesting app was given (`?e=`), minutes long.
+  const session = useMemo(() => new URLSearchParams(window.location.search).get("e") ?? "", []);
   const code = useRef("");
   const [phase, setPhase] = useState<Phase>(link ? { kind: "loading" } : { kind: "invalid" });
   const base = link ? `/api/site/${enc(link.tenant)}/sign/signing/${enc(link.token)}` : "";
   useShellTitle(phase.kind === "ready" ? phase.view.request.title : tr("Sign a document"));
+
+  // Framed on a site the workspace allowed (`?embed=1`): tell the site when the signer is done, whichever way. The page
+  // says nothing else; the app that opened it learns the outcome from Sign's events.
+  const embedded = useMemo(() => new URLSearchParams(window.location.search).get("embed") === "1", []);
+  useEffect(() => {
+    if (!embedded || (phase.kind !== "signed" && phase.kind !== "declined")) return;
+    (window as { ferrum?: { embedDone?: () => void } }).ferrum?.embedDone?.();
+  }, [embedded, phase.kind]);
 
   // No session goes along: the link is the signer's whole credential.
   const call = useCallback(
@@ -74,9 +89,13 @@ export function SigningPage() {
         ...init,
         cache: "no-store",
         credentials: "omit",
-        headers: { ...(init.headers as Record<string, string> | undefined), ...(code.current ? { "X-Access-Code": code.current } : {}) },
+        headers: {
+          ...(init.headers as Record<string, string> | undefined),
+          ...(code.current ? { "X-Access-Code": code.current } : {}),
+          ...(session ? { "X-Sign-Session": session } : {}),
+        },
       }),
-    [base],
+    [base, session],
   );
 
   const open = useCallback(async () => {
@@ -308,6 +327,8 @@ export function Ready({
   reopen: () => void;
 }) {
   const { request, signer, fields } = view;
+  // The document is fetched with the page's headers (a plain link cannot carry the code or the session).
+  const fetched = hasCode || new URLSearchParams(window.location.search).has("e");
   const name = signer.name ?? "";
   const tasks = useMemo(() => tasksOf(fields), [fields]);
   const pages = useMemo(() => pagesWithFields(fields), [fields]);
@@ -318,6 +339,10 @@ export function Ready({
   const [pending, setPending] = useState<Mark | null>(null);
   const [text, setText] = useState("");
   const [agreed, setAgreed] = useState(false);
+  /** What each Attachment field was given: the file's name as uploaded (the value itself is the file's id). */
+  const [names, setNames] = useState<Record<string, string>>(() => Object.fromEntries(fields.filter((f) => f.uploaded?.name).map((f) => [f.id, f.uploaded?.name ?? ""])));
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [problems, setProblems] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -359,17 +384,42 @@ export function Ready({
     if (t.kind === "signature" || t.kind === "initials") {
       setPending(null);
       setDialog({ kind: "mark", which: t.kind });
-    } else if (t.kind === "text") {
+    } else if (t.kind === "text" || t.kind === "choice" || t.kind === "number" || t.kind === "file") {
       setText(typeof entry.values[t.key] === "string" ? (entry.values[t.key] as string) : "");
+      setUploadError(null);
       setDialog({ kind: "text", key: t.key });
     } else {
       commit((e) => ({ ...e, values: { ...e.values, [t.key]: e.values[t.key] !== true } }), t.key);
     }
   };
 
+  const renderBox = (f: SigningField, size: PageSize) => {
+    const task = tasks.find((t) => t.fields.some((x) => x.id === f.id));
+    return <Box key={f.id} field={f} size={size} state={boxState(f, tasks, entry, target?.key ?? null)} entry={entry} name={name} names={names} task={task} problem={problems[task?.key ?? ""]} onActivate={activate} />;
+  };
+
   const primary = () => {
     if (target) activate(target);
     else setDialog({ kind: "review" });
+  };
+
+  /** Sends the chosen file to the field; what comes back is the file's id, kept as the field's answer. */
+  const upload = async (task: Task, file: File) => {
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const r = await call(`/attachments/${enc(task.key)}`, { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-File-Name": enc(file.name) }, body: file });
+      const body = await r.json().catch(() => null);
+      if (r.ok && typeof body?.file === "string") {
+        setText(body.file);
+        setNames((n) => ({ ...n, [task.key]: typeof body.name === "string" ? body.name : file.name }));
+      } else if (r.status === 404 || r.status === 410) onChange(classify(r.status, body, hasCode));
+      else setUploadError(sentence(body?.fields?.[0]?.message ?? body?.message ?? "") || tr("Something went wrong ({status}).", { status: r.status }));
+    } catch {
+      setUploadError(offline());
+    } finally {
+      setUploading(false);
+    }
   };
 
   const submit = async () => {
@@ -427,6 +477,7 @@ export function Ready({
     <div className="sg-sign">
       <header className="sg-top">
         <div className="sg-top-main">
+          {view.brand?.logo && <img className="sg-logo" src={view.brand.logo} alt={view.brand.name ?? ""} height={28} />}
           <h1 className="sg-title">{isolate(request.title)}</h1>
           <p className="sg-from">
             {sender ? tr("From {sender}", { sender }) : tr("Sent to you for signature")}
@@ -476,12 +527,12 @@ export function Ready({
               {first ? tr("Hello {first}. ", { first }) : ""}
               <strong>{pages.length ? tr("Your boxes are on {pages}.", { pages: pagesText(pages) }) : tr("There is nothing to fill in on the pages.")}</strong> {tr("Read the whole document, then fill them in.")}
             </p>
-            <DocumentLink base={base} hasCode={hasCode} call={call} name={request.document_name} pages={request.pages.length} />
-            {!hasCode && !pdf && <Preview src={`${base}/document`} />}
+            <DocumentLink base={base} hasCode={fetched} call={call} name={request.document_name} pages={request.pages.length} />
+            {!fetched && !pdf && <Preview src={`${base}/document`} />}
           </div>
           {(pdf ? request.pages.map((p) => p.page) : pages).map((n) => {
             const size = request.pages.find((p) => p.page === n) ?? { page: n, width: 612, height: 792 };
-            const here = fields.filter((f) => f.page === n);
+            const here = fields.filter((f) => f.page === n && (f.document_no ?? 1) === 1);
             return (
               <Sheet
                 key={n}
@@ -491,15 +542,15 @@ export function Ready({
                 picture={pdf && <PdfPage pdf={pdf} number={n} />}
                 note={here.length ? (here.length === 1 ? tr("1 box for you") : tr("{n} boxes for you", { n: here.length })) : undefined}
               >
-                {here.map((f) => {
-                  const task = tasks.find((t) => t.fields.some((x) => x.id === f.id));
-                  return (
-                    <Box key={f.id} field={f} size={size} state={boxState(f, tasks, entry, target?.key ?? null)} entry={entry} name={name} task={task} problem={problems[task?.key ?? ""]} onActivate={activate} />
-                  );
-                })}
+                {here.map((f) => renderBox(f, size))}
               </Sheet>
             );
           })}
+          {(request.documents ?? [])
+            .filter((d) => d.n > 1)
+            .map((d) => (
+              <ExtraDocument key={d.n} doc={d} base={base} call={call} fields={fields} box={renderBox} />
+            ))}
           <p className="sg-end muted">
             {tr("That's everything on the pages.")} <button type="button" className="link-btn" onClick={() => setDialog({ kind: "decline" })}>{tr("Can't sign this? Decline…")}</button>
           </p>
@@ -643,7 +694,7 @@ export function Ready({
         footer={
           <>
             <Button onClick={() => setDialog(null)}>{tr("Cancel")}</Button>
-            <Button type="submit" form="sg-text-form" variant="primary" disabled={textTask?.required && !text.trim()}>
+            <Button type="submit" form="sg-text-form" variant="primary" disabled={(textTask?.required && !text.trim()) || uploading}>
               {tr("Save")}
             </Button>
           </>
@@ -656,8 +707,46 @@ export function Ready({
             if (textTask) commit((en) => ({ ...en, values: { ...en.values, [textTask.key]: text.trim() } }), textTask.key);
           }}
         >
-          <Field label={textTask?.label ?? ""} htmlFor="sg-text" required={textTask?.required} error={textTask ? problems[textTask.key] : undefined} hint={textTask?.required ? undefined : tr("Optional")}>
-            <input id="sg-text" className="input" maxLength={500} autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
+          <Field label={textTask?.label ?? ""} htmlFor="sg-text" required={textTask?.required} error={textTask ? uploadError ?? problems[textTask.key] : undefined} hint={textTask?.required ? undefined : tr("Optional")}>
+            {textTask?.kind === "choice" && textTask.fields[0].field_type === "Radio" ? (
+              <div role="radiogroup" aria-label={textTask.label} className="stack" style={{ gap: 6 }}>
+                {(textTask.fields[0].options ?? []).map((o) => (
+                  <label key={o} className="sg-consent">
+                    <input type="radio" name="sg-choice" checked={text === o} onChange={() => setText(o)} />
+                    <span>{isolate(o)}</span>
+                  </label>
+                ))}
+              </div>
+            ) : textTask?.kind === "choice" ? (
+              <select id="sg-text" className="input" value={text} onChange={(e) => setText(e.target.value)}>
+                <option value="">{tr("Choose…")}</option>
+                {(textTask.fields[0].options ?? []).map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            ) : textTask?.kind === "number" ? (
+              <input id="sg-text" className="input" inputMode="decimal" maxLength={40} autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
+            ) : textTask?.kind === "file" ? (
+              <div className="stack" style={{ gap: 6 }}>
+                <input
+                  id="sg-text"
+                  type="file"
+                  className="input"
+                  disabled={uploading}
+                  accept={(textTask.fields[0].accept ?? []).map((k) => (k === "pdf" ? "application/pdf" : k === "png" ? "image/png" : "image/jpeg")).join(",")}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f && textTask) void upload(textTask, f);
+                  }}
+                />
+                {text && names[textTask.key] && <span className="muted">{tr("Uploaded: {name}", { name: names[textTask.key] })}</span>}
+                {uploading && <Spinner />}
+              </div>
+            ) : (
+              <input id="sg-text" className="input" maxLength={500} autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
+            )}
           </Field>
         </form>
       </Dialog>
@@ -726,7 +815,7 @@ export function Ready({
           {error && <Alert tone="error">{isolate(error)}</Alert>}
           <label className="sg-consent">
             <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
-            <span>{isolate(view.consent)}</span>
+            <span>{isolate(view.consent ?? tr("I agree to sign this document electronically and that my electronic signature is as valid as my handwritten one."))}</span>
           </label>
           {problems.consent && <p className="field-error">{isolate(problems.consent)}</p>}
           <p className="sg-kind">
@@ -747,6 +836,31 @@ export function Ready({
   );
 }
 
+/** A further document of the request: its pages, drawn from the PDF when it can be, with the signer's boxes on them. */
+function ExtraDocument({ doc, base, call, fields, box }: { doc: { n: number; name: string; pages: PageSize[] }; base: string; call: Call; fields: SigningField[]; box: (f: SigningField, size: PageSize) => ReactNode }) {
+  const pdf = usePdf(() => call(`/document?n=${doc.n}`).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.statusText)))), `${base}#${doc.n}`);
+  return (
+    <section aria-label={doc.name}>
+      <h2 className="sg-h2">{isolate(tr("Document {n}: {name}", { n: doc.n, name: doc.name }))}</h2>
+      {doc.pages.map((size) => {
+        const here = fields.filter((f) => f.document_no === doc.n && f.page === size.page);
+        return (
+          <Sheet
+            key={size.page}
+            number={size.page}
+            count={doc.pages.length}
+            size={size}
+            picture={pdf && <PdfPage pdf={pdf} number={size.page} />}
+            note={here.length ? (here.length === 1 ? tr("1 box for you") : tr("{n} boxes for you", { n: here.length })) : undefined}
+          >
+            {here.map((f) => box(f, size))}
+          </Sheet>
+        );
+      })}
+    </section>
+  );
+}
+
 // ───────────────────────── the sheets' boxes ─────────────────────────
 
 function Box({
@@ -755,6 +869,7 @@ function Box({
   state,
   entry,
   name,
+  names,
   task,
   problem,
   onActivate,
@@ -764,6 +879,7 @@ function Box({
   state: ReturnType<typeof boxState>;
   entry: Entry;
   name: string;
+  names: Record<string, string>;
   task: Task | undefined;
   problem?: string;
   onActivate: (t: Task) => void;
@@ -771,6 +887,7 @@ function Box({
   const style = boxStyle(f, size);
   const word = f.label || LABEL[f.field_type];
   const text = task?.kind === "text" && typeof entry.values[task.key] === "string" ? (entry.values[task.key] as string) : "";
+  const answer = task && typeof entry.values[task.key] === "string" ? (entry.values[task.key] as string) : "";
   const mark = f.field_type === "Signature" ? entry.signature : f.field_type === "Initials" ? entry.initials : null;
   let content: ReactNode;
   switch (f.field_type) {
@@ -797,6 +914,19 @@ function Box({
       break;
     case "Checkbox":
       content = state === "done" ? <Check size="1.2em" aria-hidden="true" /> : <span className="sg-tick" aria-hidden="true" />;
+      break;
+    case "Dropdown":
+    case "Radio":
+    case "Number":
+      content = <span className="sg-box-text">{answer || word}</span>;
+      break;
+    case "Attachment":
+      content = (
+        <>
+          <Paperclip size="1.1em" aria-hidden="true" />
+          <span className="sg-box-text">{answer ? names[f.id] || tr("Attached") : word}</span>
+        </>
+      );
       break;
   }
   const status = state === "auto" ? tr("filled in for you") : state === "done" ? "done" : f.required ? "required" : "optional";

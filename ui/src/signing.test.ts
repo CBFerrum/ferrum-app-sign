@@ -253,3 +253,28 @@ describe("signing", () => {
     expect(initialsOf("12 34")).toBe("");
   });
 });
+
+describe("choices, numbers and attachments", () => {
+  const rich = [
+    box("pick", "Dropdown", 1, 100, 72, { label: "Plan", options: ["Basic", "Pro"] }),
+    box("radio", "Radio", 1, 140, 72, { label: "Colour", options: ["Red", "Blue"] }),
+    box("seats", "Number", 1, 180, 72, { label: "Seats", decimals: 0 }),
+    box("card", "Attachment", 1, 220, 72, { label: "ID card", accept: ["pdf", "png"] }),
+  ];
+
+  it("makes a task of each, done when answered", () => {
+    const tasks = tasksOf(rich);
+    expect(tasks.map((t) => t.kind)).toEqual(["choice", "choice", "number", "file"]);
+    const e = emptyEntry();
+    expect(complete(tasks, e)).toBe(false);
+    e.values = { pick: "Pro", radio: "Blue", seats: "7", card: "file-id" };
+    expect(complete(tasks, e)).toBe(true);
+    expect(actionLabel(tasks[3])).toBe("Attach “ID card”");
+  });
+
+  it("sends what was answered, and the id of an uploaded file", () => {
+    const e = emptyEntry();
+    e.values = { pick: " Pro ", radio: "", seats: "7", card: "file-id" };
+    expect(signBody(rich, e).values).toEqual({ pick: "Pro", seats: "7", card: "file-id" });
+  });
+});

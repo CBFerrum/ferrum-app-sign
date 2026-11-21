@@ -9,25 +9,28 @@
 //! * `SignEvent` is the append-only, hash-chained audit trail.
 //! * When the last signer signs, `seal.rs` stamps every value onto the original pages, appends an
 //!   audit certificate as an incremental update and stores the sealed PDF with its SHA-256.
-//! * Mail (the `comms` app) delivers links and copies when installed; otherwise actions return
-//!   copyable links and people get in-app notifications.
+//! * Links and copies are emailed with the workspace's own wording (message templates) through the server's mailer;
+//!   without one, actions return copyable links and people get in-app notifications.
 
+mod bulk;
 mod document;
 mod envelope;
 mod event;
-pub mod identity;
 mod keys;
 mod notice;
+mod pades;
 mod pdf;
 mod reports;
 mod request;
 mod seal;
+mod seal_key;
 mod settings;
 mod signature;
 mod signing;
 mod site;
 mod template;
 mod token;
+mod tsa;
 mod upkeep;
 
 use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, TimeZone, Utc};
@@ -58,19 +61,19 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("SignSettings", Arc::new(settings::SettingsHook))
         .register("SignTemplate", Arc::new(template::TemplateHook))
         .register("SignRequest", Arc::new(request::RequestHook))
+        .register("SignBulkSend", Arc::new(bulk::BulkHook))
         .register("SignEvent", Arc::new(event::EventHook))
         .add_site("sign", site);
 }
 
-/// Sends `values` (a Sign Request's: `title`, `document` as a `/files/<id>` path, `source_sha256`, `signers`,
-/// `reference_entity`, `reference_id`, `message`, `verify_identity`...) for signature at once, about the record it
-/// names, as `ctx` (a person, or the system on someone's behalf). Without fields of its own, a signature page is
-/// added for its signers. Returns the request as stored. The same as creating a Sign Request with
-/// `send_on_create` (the `sign.sign_request.create` capability a configured step invokes).
-pub async fn send_for_signature(k: &Kernel, tx: &mut ferrum_kernel::Tx, ctx: &Ctx, mut values: Doc) -> Result<Doc> {
-    values.insert("send_on_create".into(), Value::Bool(true));
-    let made = k.insert_tx(ctx, tx, "SignRequest", values).await?;
-    k.get_tx(ctx, tx, "SignRequest", doc_id(&made)?, false).await
+/// The SHA-256 of the workspace's seal certificate, made if this is the first use; none when the workspace chose no seal.
+/// For checking from outside that one key serves every seal (tests, the operator).
+#[doc(hidden)]
+pub async fn workspace_seal(k: &Kernel, tenant: uuid::Uuid) -> ferrum_kernel::Result<Option<String>> {
+    let mut tx = k.db.tenant_tx(tenant).await?;
+    let found = seal_key::load(k, &mut tx, tenant).await?;
+    tx.commit().await?;
+    found.map(|s| s.certificate_sha256()).transpose()
 }
 
 /// This app's reports.
@@ -146,14 +149,9 @@ pub(crate) async fn lock_request(k: &Kernel, ctx: &Ctx, tx: &mut ferrum_kernel::
     k.get_tx(ctx, tx, "SignRequest", id, false).await
 }
 
-/// Whether the workspace has the Mail app, which delivers this app's emails when installed.
-pub(crate) fn mail(ctx: &Ctx) -> bool {
-    ctx.schema.packages.iter().any(|p| p == "comms") && ctx.schema.entity("Communication").is_some()
-}
-
-/// Whether this app's emails can go out at all: through the Mail app, or the server's mailer.
-pub(crate) fn can_email(k: &ferrum_kernel::Kernel, ctx: &Ctx) -> bool {
-    mail(ctx) || k.mailer.is_some()
+/// Whether this app's emails can go out: the server has a mailer (the platform's messages send through it).
+pub(crate) fn can_email(k: &ferrum_kernel::Kernel) -> bool {
+    k.mailer.is_some()
 }
 
 /// The physical table of a child table field.
@@ -182,11 +180,31 @@ mod tests {
         let catalog = ferrum_meta::Catalog::from_packages(all).unwrap_or_else(|e| panic!("{e}"));
         let schema = ferrum_meta::effective::build(&catalog, &[PACKAGE.to_string()], &[], 1).unwrap_or_else(|e| panic!("{e}"));
         assert!(schema.warnings.is_empty(), "{:?}", schema.warnings);
-        assert!(schema.entity("SignSettings").is_some_and(|e| e.secret_fields().count() == 1));
-        for e in ["SignRequest", "SignTemplate", "SignEvent"] {
+        // The signing key and (S11-G5, design B2.2) the seal key: the only secrets, both write-only.
+        assert!(schema.entity("SignSettings").is_some_and(|e| e.secret_fields().count() == 2));
+        for e in ["SignRequest", "SignTemplate", "SignEvent", "SignDocument", "SignBulkSend"] {
             assert!(schema.entity(e).is_some(), "{e}");
         }
         assert!(MANIFEST.contains("packages: [sign]"));
+    }
+
+    /// One path for people and agents: every action a person can press says what it does, what it returns and what
+    /// "done" means (Ferrum docs/guides/06, scripts/agent_parity.py).
+    #[test]
+    fn every_visible_action_has_a_full_contract() {
+        let mut all = ferrum_domain::packages().expect("platform packages");
+        all.extend(super::packages().expect("app packages"));
+        let catalog = ferrum_meta::Catalog::from_packages(all).unwrap_or_else(|e| panic!("{e}"));
+        let schema = ferrum_meta::effective::build(&catalog, &[PACKAGE.to_string()], &[], 1).unwrap_or_else(|e| panic!("{e}"));
+        let mut seen = 0;
+        for name in ["SignSettings", "SignTemplate", "SignRequest", "SignEvent"] {
+            for a in schema.entity(name).expect(name).def.actions.iter().filter(|a| !a.hidden) {
+                let c = a.contract.as_ref().unwrap_or_else(|| panic!("{name}.{} has no contract", a.name));
+                assert!(c.effect.is_some() && c.returns.is_some() && c.completion.is_some(), "{name}.{}: effect, returns, completion", a.name);
+                seen += 1;
+            }
+        }
+        assert!(seen >= 7);
     }
 
     #[test]

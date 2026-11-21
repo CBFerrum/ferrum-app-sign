@@ -2,14 +2,15 @@
 //!
 //! A Sign Request made with `send_on_create` is sent as soon as it is made: from Ferrum's records API, from the
 //! `sign.sign_request.create` capability (a configured button's or transition's `invoke`, after a `generate` that
-//! made the file), or from [`crate::send_for_signature`]. Its document is a stored file; `source_sha256`, when
+//! made the file, or another app's `call_tx` through its `uses`). Its document is a stored file; `source_sha256`, when
 //! given, must be that file's digest (a generated document's `sha256`), so what is signed is what was generated.
 //! Without fields of its own, a signature page is added after the document's last page with a box for each signer
 //! (the original's bytes stay its prefix), and the fields are placed there. A file generated in the same transaction
 //! (a configured button's `generate`, then its `invoke`) cannot be read until that transaction commits: the request
 //! is made then as a draft, and upkeep adds the page and sends it within the minute. The request ends by its record's own
 //! update (Completed, Declined, Expired), which automations on Sign Request take, and by the package's events
-//! `sign.request_completed`, `sign.request_declined` and `sign.request_expired`, which carry the record it is about.
+//! `sign.request_completed`, `sign.request_declined`, `sign.request_expired` and `sign.request_voided`, which carry the
+//! record it is about.
 
 use crate::document::{self, page_sizes};
 use crate::{doc_id, pdf, rows, s};
@@ -131,10 +132,15 @@ pub(crate) async fn ended(tx: &mut Tx, ctx: &Ctx, request: &Doc, status: &str) -
         "Completed" => "request_completed",
         "Declined" => "request_declined",
         "Expired" => "request_expired",
+        "Voided" => "request_voided",
         _ => return Ok(()),
     };
-    let payload = json!({"request": s(request, "id"), "number": s(request, "number"), "status": status,
+    let mut payload = json!({"request": s(request, "id"), "number": s(request, "number"), "status": status,
                          "reference_entity": s(request, "reference_entity"), "reference_id": s(request, "reference_id"),
-                         "sealed_document": s(request, "sealed_document")});
+                         "sealed_document": s(request, "sealed_document"),
+                         "documents": document::documents(request).iter().map(|d| json!({"name": d.name, "sealed_document": d.sealed_document, "sealed_sha256": d.sealed_sha256})).collect::<Vec<_>>()});
+    if status == "Voided" {
+        payload["reason"] = json!(s(request, "void_reason"));
+    }
     ferrum_kernel::outbox::enqueue(tx, ctx.tenant, &format!("{}.{name}", crate::PACKAGE), Some("SignRequest"), Some(doc_id(request)?), payload).await
 }
